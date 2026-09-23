@@ -121,8 +121,16 @@ listed in Supabase → Auth → URL Configuration → Additional redirect URLs (
 </activity>
 ```
 
-and in `android/app/build.gradle` set `minSdkVersion 23` (`record` 5.x requires it). No
-`google-services.json` is involved: sign-in is Supabase's generic OAuth flow through
+and in `android/app/build.gradle` set `minSdkVersion 23` (`record` 5.x requires it).
+
+**Web** (the same codebase builds the site) — after `flutter create .`, two files carry
+the name a visitor sees, and neither is generated from the Dart sources:
+`web/index.html`'s `<title>MessengerX</title>` and `web/manifest.json`'s
+`"name": "MessengerX"` / `"short_name": "MessengerX"` (plus `web/icons/` for the
+launcher and `background_color`). Build it with
+`flutter build web --dart-define-from-file=../../.messengerx/app.json`.
+
+No `google-services.json` is involved: sign-in is Supabase's generic OAuth flow through
 `url_launcher`, not the native Google Sign-In SDK, which is also why the *web* Google
 client id is the one the server validates.
 
