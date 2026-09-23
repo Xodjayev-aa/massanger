@@ -1,0 +1,10 @@
+{
+  "name": "@messengerx/typecheck",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dev-only: typechecks the Deno edge functions with tsc (no Deno binary needed in CI sandboxes).",
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "typescript": "^5.6.0"
+  }
+}

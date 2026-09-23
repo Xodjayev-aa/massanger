@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.AsyncIterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": false,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": [],
+    "baseUrl": "../..",
+    "paths": {
+      "npm:@supabase/supabase-js@2": ["node_modules/@supabase/supabase-js"],
+      "npm:@supabase/supabase-js": ["node_modules/@supabase/supabase-js"]
+    }
+  },
+  "include": [
+    "../../supabase/functions/**/*.ts",
+    "./deno-shims.d.ts"
+  ]
+}

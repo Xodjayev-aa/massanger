@@ -1,0 +1,113 @@
+# MessengerX — local Supabase configuration.
+#
+# `supabase start` reads this file; `supabase functions serve` reuses [api]/[db],
+# so the edge functions run against the same keys as the app. Everything here is
+# local-only: production configuration lives in the dashboard and in deployment
+# secrets, never in this file. Unknown keys are reported by the CLI on start — if
+# your CLI version renames a table, fix it here rather than forking the stack.
+
+project_id = "messengerx"
+
+[api]
+enabled = true
+port = 54321
+# Anon key/JWT secret are generated per project: `supabase start` prints them, and
+# you paste them into supabase/functions/.env.local, services/telegram_bridge/.env
+# and .messengerx/app.json (the app's --dart-define file). `make env` creates all three
+# from the committed examples; nothing here is a secret worth committing.
+extra_keep_alive = 75
+max_rows = 1000
+
+[api.tls]
+enabled = false
+
+[db]
+major_version = 17
+port = 54322
+shadow_port = 54320
+# `supabase db reset` replays supabase/migrations in order and then seed.sql, which
+# is exactly the CI check for "every migration is runnable from zero".
+major_upgrade = { enabled = false }
+
+[db.pooler]
+enabled = false
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[realtime]
+enabled = true
+# messages, chats and chat_typing join the supabase_realtime publication in
+# migration 00008, where the RLS policies keep non-member rows out of the stream.
+
+[storage]
+enabled = true
+file_size_limit = "20MiB"
+# Bucket names and per-bucket size limits (avatars 5MiB, images 20MiB,
+# voice-notes 10MiB) are created by migration 00008 so staging matches local.
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:54321/auth/v1/callback"
+additional_redirect_urls = [
+  "io.messengerx.app://login-callback",
+  "com.messengerx.app://login-callback",
+]
+jwt_expiry = 3600
+jwt_secret = "super-secret-jwt-token-with-at-least-32-characters-long"
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.external.google]
+enabled = true
+client_id = "env(GOOGLE_OAUTH_CLIENT_ID)"
+secret = "env(GOOGLE_OAUTH_CLIENT_SECRET)"
+skip_nonce_check = false
+
+# Phone sign-in is used only to verify a number the user is linking to Telegram,
+# so self-service SMS stays off locally and the code is read from the console.
+[auth.sms]
+enable_signup = false
+enable_confirmations = false
+max_frequency = 60
+time_box = 600
+
+[edge_runtime]
+enabled = true
+inspector_port = 8083
+policy = "oneshot"
+
+# ── functions ────────────────────────────────────────────────────────────────
+# verify_jwt = true rejects a request before our handler runs, which is what every
+# authenticated caller should get. telegram-ingest is the exception: the bridge has
+# no user JWT — it authenticates with its own bearer token plus an HMAC signature,
+# so the platform check must be off there and the function's own check is mandatory.
+
+[functions.account-age-gate]
+enabled = true
+verify_jwt = true
+
+[functions.telegram-link]
+enabled = true
+verify_jwt = true
+
+[functions.telegram-send]
+enabled = true
+verify_jwt = true
+
+[functions.telegram-ingest]
+enabled = true
+verify_jwt = false
+
+[studio]
+enabled = true
+port = 54323
+
+[analytics]
+enabled = false
+
+[pooler]
+enabled = false
