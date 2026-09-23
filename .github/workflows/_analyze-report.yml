@@ -1,8 +1,8 @@
 # TEMPORARY debug scaffold — delete once `flutter analyze` is green.
 #
-# The Actions *log* host is unreachable from some review environments, so this job
-# posts the analyzer's errors as a comment on the open pull request through the API
-# host instead. It changes nothing about the app.
+# Posts the analyzer output and the resolved public API of the packages this app
+# depends on as a comment on the open pull request, because the Actions log host is
+# unreachable from some review environments. It changes nothing about the app.
 name: Analyze report (temporary)
 
 on:
@@ -26,21 +26,57 @@ jobs:
           flutter-version: 3.24.5
       - name: pub get
         working-directory: apps/mobile_app
-        run: flutter pub get | tail -5
+        run: flutter pub get | tail -3
       - name: analyze
         working-directory: apps/mobile_app
         run: |
           set +e
           flutter analyze --no-fatal-infos --no-fatal-warnings > /tmp/analyze.txt 2>&1
           {
-            echo "## \`flutter analyze\` (temporary report)"
+            echo "## \`flutter analyze\`"
             echo
-            echo "\`\`\`"
-            grep -E "^ *(error|warning) •" /tmp/analyze.txt | head -180
+            echo '```'
+            grep -E "^ *(error|warning) •" /tmp/analyze.txt | head -140
             tail -1 /tmp/analyze.txt
-            echo "\`\`\`"
+            echo '```'
           } > /tmp/report.md
-          wc -l /tmp/report.md
+      - name: resolved api
+        run: |
+          CACHE="$HOME/.pub-cache/hosted/pub.dev"
+          {
+            echo
+            echo "## Resolved package APIs"
+            echo
+            echo '```'
+            ls "$CACHE" | grep -E "^(record|record_platform_interface|gotrue|functions_client|storage_client|postgrest|supabase|supabase_flutter|bloc|flutter_bloc|go_router|just_audio|qr_flutter|photo_view|image_picker)" || true
+            echo "--- record: public classes"
+            grep -rn "^class \|^abstract class \|^mixin " "$CACHE"/record-*/lib/*.dart "$CACHE"/record-*/lib/src/*.dart 2>/dev/null | grep -v "^.*_platform" | head -20
+            echo "--- record: AudioRecorder/Record API"
+            grep -rnE "^\s+(Future<[A-Za-z?<>]+>|Stream<[A-Za-z?<>]+>|void|bool) [a-zA-Z_]+\(" "$CACHE"/record-*/lib/src/*.dart 2>/dev/null | head -40
+            echo "--- record_platform_interface: what Record declares"
+            grep -rnE "^\s+(abstract )?(Future<[A-Za-z?<>]+>|Stream<[A-Za-z?<>]+>|void|bool) [a-zA-Z_]+\(" "$CACHE"/record_platform_interface-*/lib/src/*.dart 2>/dev/null | head -30
+            echo "--- gotrue: AuthChangeEvent"
+            grep -rn "enum AuthChangeEvent" -A 16 "$CACHE"/gotrue-*/lib/ 2>/dev/null | head -22
+            echo "--- gotrue: onAuthStateChange stream type + AuthState"
+            grep -rn "class AuthState" -A 8 "$CACHE"/gotrue-*/lib/ 2>/dev/null | head -14
+            echo "--- functions_client: FunctionException"
+            grep -rn "class FunctionException" -A 22 "$CACHE"/functions_client-*/lib/ 2>/dev/null | head -28
+            echo "--- postgrest: PostgrestException"
+            grep -rn "class PostgrestException" -A 18 "$CACHE"/postgrest-*/lib/ 2>/dev/null | head -24
+            echo "--- storage_client: StorageException + FileOptions"
+            grep -rn "class StorageException" -A 10 "$CACHE"/storage_client-*/lib/ 2>/dev/null | head -14
+            echo "--- supabase_flutter: signInWithOAuth signature"
+            grep -rn "signInWithOAuth" -A 14 "$CACHE"/gotrue-*/lib/src/gotrue_client.dart 2>/dev/null | head -22
+            echo "--- supabase_flutter: fromEnvironment/initialize"
+            grep -rn "static Future<Supabase> initialize" -A 16 "$CACHE"/supabase_flutter-*/lib/src/supabase.dart 2>/dev/null | head -22
+            echo "--- go_router: refreshListenable type"
+            grep -rn "refreshListenable" "$CACHE"/go_router-*/lib/src/router.dart 2>/dev/null | head -6
+            echo "--- flutter_bloc: BlocProvider.value + BlocBuilder generics"
+            grep -rn "class BlocProvider" -A 8 "$CACHE"/flutter_bloc-*/lib/src/bloc_provider.dart 2>/dev/null | head -12
+            echo "--- bloc: emit visibility"
+            grep -rn "protected" -B 3 "$CACHE"/bloc-*/lib/src/bloc.dart 2>/dev/null | head -8
+            echo '```'
+          } | head -c 42000 >> /tmp/report.md
       - name: post
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
