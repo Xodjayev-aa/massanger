@@ -57,12 +57,12 @@ exposes three interchangeable transports and one of them is a simulator:
 | --- | --- | --- |
 | `memory` | In-process TDLib simulator. Real outbox loop, real lease/FLOOD_WAIT handling, fake Telegram. | unit/integration tests, `make bridge` on a laptop, demos |
 | `koffi` | `libtdjson` loaded into the Node process | production default |
-| `td_ws` | A websocket TDLib sidecar (`TD_WS_URL`) | when you want TDLib upgraded independently of the worker image |
+| `websocket` | A websocket TDLib sidecar (`TD_WS_URL`) | when you want TDLib upgraded independently of the worker image |
 
 The suite (`npm run test:bridge`) exercises the protocol **contract** against
 `memory`, which is the only honest way to test `updateAuthorizationState`,
 `sending_id` echo correlation and `FLOOD_WAIT_n` parking without talking to
-Telegram's servers. `koffi`/`td_ws` are then verified by the same code path against a
+Telegram's servers. `koffi`/`websocket` are then verified by the same code path against a
 real account — §5 ends with that checklist. GramJS is deliberately **not** an adapter:
 it cannot correlate an outbound message with its `sending_id`, and its own
 authorization state machine cannot be paused to let the user type a code, which is the
@@ -134,7 +134,8 @@ Studio      http://127.0.0.1:54323
 | | `SUPABASE_JWT_SECRET` | the CLI's `JWT secret` (default matches `config.toml`) |
 | `services/telegram_bridge/.env` | `SUPABASE_URL`, both keys | same values |
 | | `SEAL_KEY`, `BRIDGE_HMAC_SECRET`, `BRIDGE_TOKEN` | must equal the function's values |
-| | `BRIDGE_BASE_URL` | `http://host.docker.internal:8787` (a function in Docker cannot reach `localhost`) |
+| | `MESSENGERX_ENV=production` | the worker defaults to `development`; the functions do not |
+| `supabase/functions/.env.local` | `BRIDGE_BASE_URL` | `http://host.docker.internal:8787` — a function in Docker cannot reach the worker's `localhost`, and the bridge itself does not read this key |
 | `.messengerx/app.json` | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | API URL + anon key |
 
 Migrations and `seed.sql` are applied by `supabase start` (and by
@@ -312,7 +313,7 @@ returns 404 with no hint of what exists.
 ### 5.2 Real TDLib, against your own account
 
 ```bash
-export BRIDGE_TRANSPORT=koffi        # or td_ws with a sidecar
+export BRIDGE_TRANSPORT=koffi        # or `websocket` with a sidecar
 export TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so
 export TDLIB_DB_KEY="$(openssl rand -hex 32)"      # keep it in your secret manager
 export TELEGRAM_API_ID=00000000
@@ -347,11 +348,14 @@ What to check when you do this for real (the CI suite cannot):
 
 | Variable | Default | Why you would change it |
 | --- | --- | --- |
-| `BRIDGE_MAX_SESSIONS` | 200 | one worker holds ~200 TDLib clients comfortably; shard by user id beyond that |
-| `BRIDGE_POLL_INTERVAL_MS` | 1500 | lower is more responsive, more CPU on the getUpdates loop |
-| `BRIDGE_OUTBOX_BATCH_SIZE` | 25 | per tick per user |
-| `BRIDGE_OUTBOX_LEASE_SECONDS` | 180 | a crashed worker's lease expires after this; keep > your worst media upload |
-| `BRIDGE_MIN_SEND_INTERVAL_MS` / `BRIDGE_SEND_BURST` | 350 / 6 | Telegram's flood control; the worker parks instead of hammering |
+| `BRIDGE_MAX_SESSIONS` | 64 (max 4096) | a worker holds a few hundred TDLib clients comfortably; beyond that, shard by user id |
+| `BRIDGE_POLL_INTERVAL_MS` | 3000 | queue fallback — the Realtime wake usually wins; lower costs CPU on the getUpdates loop |
+| `BRIDGE_OUTBOX_BATCH_SIZE` | 10 (max 200) | rows claimed per tick per user |
+| `BRIDGE_OUTBOX_LEASE_SECONDS` | 180 | a crashed worker's lease expires after this; keep it above your worst media upload |
+| `BRIDGE_MIN_SEND_INTERVAL_MS` / `BRIDGE_MAX_SEND_PER_MINUTE` | 120 / 20 | Telegram's flood control; the worker parks the row instead of hammering |
+| `BRIDGE_SESSION_IDLE_SECONDS` | 600 | idle sessions retire and restart lazily, which is what makes one worker serve thousands of accounts |
+| `MESSENGERX_ENV` | `development` | **set it to `production`**: it is what makes the bridge refuse an unsealed link payload and refuse an open admin surface (the functions default to `production`, the worker does not) |
+| `TELEGRAM_DEVICE_MODEL` | `MessengerX Bridge` | this is the label in the user's Telegram → Devices list |
 | `INGEST_MODE` | `function` | `rpc` posts through the DB directly (service-role) — only for self-hosted installs without edge runtime |
 | `TD_VERBOSITY` | 1 | 2 while debugging a link that stalls |
 | `BRIDGE_TRANSPORT` | `koffi` | see §0 |

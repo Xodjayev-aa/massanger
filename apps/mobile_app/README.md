@@ -40,9 +40,19 @@ flutter pub get
 
 `flutter create .` is needed because the platform folders are generated artifacts — the
 repo tracks `lib/`, `test/`, `pubspec.yaml`, `analysis_options.yaml` and this README.
-Use `--org com.messengerx --project-name messengerx_app` if you want the generated bundle
-ids to match the ones Supabase and Google are configured for; the deep-link callback
-scheme below assumes `com.messengerx.app`.
+Generate the scaffolding with the project's own identity:
+
+```bash
+flutter create . --org com.messengerx --project-name messengerx_app
+```
+
+That produces bundle ids like `com.messengerx.messengerx_app`, while the deep-link
+callback this app uses is `com.messengerx.app` — Supabase's redirect allow-list and the
+Google OAuth clients are keyed on the latter. So set it explicitly after generating
+(Android: `applicationId` in `android/app/build.gradle`; iOS:
+`PRODUCT_BUNDLE_IDENTIFIER` in `ios/Runner.xcodeproj/project.pbxproj`), or pick a
+different scheme and change it in all four places at once: this file,
+`supabase/config.toml`, the Supabase dashboard and the Google client.
 
 Then give the app its endpoint (values come from `supabase start` or your hosted
 project — see [../../docs/runbook.md](../../docs/runbook.md) §2):
@@ -130,8 +140,12 @@ client id is the one the server validates.
   because `set_typing(p_on: false)` deletes it.
 - **Receipts** are only sent for other people's messages while the chat is focused, via
   `mark_messages_delivered`; read-marking is `mark_chat_read` on dispose/open.
-- **Voice notes** are recorded with `record` 5.x (`amp` stream → `Waveform.fromDbfs`),
-  uploaded as `voice-notes/<chat>/<uuid>.wav`, and played through one shared
+- **Voice notes** are recorded with `record` 5.x (`AudioRecorder.startStream` with
+  `AudioEncoder.pcm16bits`): the same PCM bytes that go into the hand-written WAV header
+  are scanned for peaks, so the meter and the stored waveform agree exactly — the
+  platform `onAmplitudeChanged` callback is throttled on Android and too coarse for a
+  three-second note. The finished file is uploaded to `voice-notes/<chat>/<uuid>.wav`
+  and played through one shared
   `just_audio` player — creating a player per bubble is how you get stuck audio focus.
   A failed upload leaves the bubble with a retry button that resends the same media map.
 - **Avatars** are public (`getPublicUrl`), everything else needs a signed URL, so

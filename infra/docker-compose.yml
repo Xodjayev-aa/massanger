@@ -3,7 +3,7 @@
 # not re-implement it: a hand-rolled Postgres would drift from supabase/config.toml
 # and produce a storage bucket layout that the migrations never created.
 #
-#   make docker-up        # bridge (+ the TDLib sidecar when BRIDGE_TRANSPORT=td_ws)
+#   make docker-up        # bridge (+ the TDLib sidecar when BRIDGE_TRANSPORT=websocket)
 #
 # Secrets are read from services/telegram_bridge/.env, which `make env` creates.
 
@@ -43,9 +43,10 @@ services:
     # every linked user has to authenticate again from the app.
     stop_grace_period: 45s
 
-  # Only needed when BRIDGE_TRANSPORT=td_ws. The image must contain the same TDLib
+  # Only needed when BRIDGE_TRANSPORT=websocket. The image must contain the same TDLib
   # version the bridge was built against (see the Dockerfile's TDLIB_VERSION).
   tdlib:
+    # Third-party image: pin the digest before using this outside a laptop.
     image: ghcr.io/apocdev/tdlib-serve:v1.8.43
     restart: unless-stopped
     command: ["-d", "/var/lib/td", "-p", "8081"]
