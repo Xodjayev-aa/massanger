@@ -1,4 +1,4 @@
-# Massanger — Flutter client
+# MessengerX — Flutter client
 
 The app is a thin, opinionated layer over the RPCs in `supabase/migrations`: it renders
 state the server decided, keeps one realtime subscription per open screen, and never
@@ -40,17 +40,17 @@ flutter pub get
 
 `flutter create .` is needed because the platform folders are generated artifacts — the
 repo tracks `lib/`, `test/`, `pubspec.yaml`, `analysis_options.yaml` and this README.
-Use `--org com.massanger --project-name massanger_app` if you want the generated bundle
+Use `--org com.messengerx --project-name messengerx_app` if you want the generated bundle
 ids to match the ones Supabase and Google are configured for; the deep-link callback
-scheme below assumes `com.massanger.app`.
+scheme below assumes `com.messengerx.app`.
 
 Then give the app its endpoint (values come from `supabase start` or your hosted
 project — see [../../docs/runbook.md](../../docs/runbook.md) §2):
 
 ```bash
-cp env/app.example.json ../../.massanger/app.json
-# edit .massanger/app.json: SUPABASE_URL, SUPABASE_ANON_KEY
-flutter run --dart-define-from-file=../../.massanger/app.json
+cp env/app.example.json ../../.messengerx/app.json
+# edit .messengerx/app.json: SUPABASE_URL, SUPABASE_ANON_KEY
+flutter run --dart-define-from-file=../../.messengerx/app.json
 ```
 
 `make app` from the repo root does exactly that. `AppEnv.validate()` throws at start-up
@@ -80,13 +80,13 @@ reason a first run on a device differs from a first run on the simulator.
 
 ```xml
 <key>NSMicrophoneUsageDescription</key>
-<string>Massanger records a voice note when you hold the microphone button.</string>
+<string>MessengerX records a voice note when you hold the microphone button.</string>
 <key>NSPhotoLibraryUsageDescription</key>
 <string>Pick photos to send in a chat.</string>
 <key>CFBundleURLTypes</key>
 <array><dict>
   <key>CFBundleURLSchemes</key>
-  <array><string>com.massanger.app</string></array>
+  <array><string>com.messengerx.app</string></array>
 </dict></array>
 ```
 
@@ -106,7 +106,7 @@ listed in Supabase → Auth → URL Configuration → Additional redirect URLs (
     <action android:name="android.intent.action.VIEW" />
     <category android:name="android.intent.category.DEFAULT" />
     <category android:name="android.intent.category.BROWSABLE" />
-    <data android:scheme="com.massanger.app" />
+    <data android:scheme="com.messengerx.app" />
   </intent-filter>
 </activity>
 ```

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:massanger_app/core/waveform.dart';
+import 'package:messengerx_app/core/waveform.dart';
 
 void main() {
   group('fromDbfs', () {

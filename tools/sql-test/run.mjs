@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * tools/sql-test — runs every Massanger migration against a throwaway
+ * tools/sql-test — runs every MessengerX migration against a throwaway
  * Postgres (PGlite = real PostgreSQL compiled to WASM) and asserts the
  * behaviour the app, the edge functions and the TDLib bridge rely on:
  *
@@ -73,7 +73,7 @@ async function throws(fn, pattern) {
 // ---------------------------------------------------------------------------
 // database bootstrap
 // ---------------------------------------------------------------------------
-const pg = await PGlite.create({ name: 'massanger-sqltest' });
+const pg = await PGlite.create({ name: 'messengerx-sqltest' });
 // multi-statement scripts go through exec(); anything with $1 bindings must use
 // query(), which is why exec() dispatches on the presence of params.
 const exec = async (sql, params) => (params ? pg.query(sql, params) : pg.exec(sql));
@@ -339,7 +339,7 @@ await test('heartbeat drives derived presence', async () => {
 await test('update_profile refuses another user\'s storage path', async () => {
   await become(U.a);
   await throws(() => rpc('public.update_profile', `null, null, '${U.b}/avatar.png', null`), /own storage prefix/);
-  await rpc('public.update_profile', `null, 'senior engineer', '${U.a}/avatar.png', '@massanger'`);
+  await rpc('public.update_profile', `null, 'senior engineer', '${U.a}/avatar.png', '@messengerx'`);
   eq(await scalar(`select avatar_path from public.profiles where id = '${U.a}'`), `${U.a}/avatar.png`);
 });
 
@@ -356,7 +356,7 @@ await test('00011: an avatar is removed only with p_clear_avatar', async () => {
     'the flag wins over a path sent at the same time');
   // Other fields are untouched by a clear-only call.
   eq(await scalar(`select bio from public.profiles where id = '${U.a}'`), 'senior engineer', 'bio survives');
-  eq(await scalar(`select telegram_username from public.profiles where id = '${U.a}'`), 'massanger', 'handle survives');
+  eq(await scalar(`select telegram_username from public.profiles where id = '${U.a}'`), 'messengerx', 'handle survives');
 });
 
 // ---------------------------------------------------------------------------
@@ -838,7 +838,7 @@ await test('app reads become Telegram viewMessages exactly once', async () => {
      'and never moves backwards');
 });
 
-await test('reading Telegram elsewhere clears the Massanger badge', async () => {
+await test('reading Telegram elsewhere clears the MessengerX badge', async () => {
   // The mirror chat has one inbound voice message (tg id 1001) that U.a has not read.
   await become(U.a);
   const before = await one(`select cp.unread_count, m.state::text as state

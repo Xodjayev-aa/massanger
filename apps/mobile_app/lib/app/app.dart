@@ -19,14 +19,14 @@ import 'theme.dart';
 /// eligibility gate (the router's `redirect` listens to it), and [ChatsBloc] owns
 /// the feed so the unread badge and the last-message previews survive opening a
 /// thread. Every other bloc is scoped to the screen that needs it.
-class MassangerApp extends StatefulWidget {
-  const MassangerApp({super.key});
+class MessengerXApp extends StatefulWidget {
+  const MessengerXApp({super.key});
 
   @override
-  State<MassangerApp> createState() => _MassangerAppState();
+  State<MessengerXApp> createState() => _MessengerXAppState();
 }
 
-class _MassangerAppState extends State<MassangerApp> with WidgetsBindingObserver {
+class _MessengerXAppState extends State<MessengerXApp> with WidgetsBindingObserver {
   late final AuthBloc _auth;
   late final ChatsBloc _chats;
 
@@ -100,7 +100,7 @@ class _MassangerAppState extends State<MassangerApp> with WidgetsBindingObserver
         buildWhen: (previous, next) => previous.status != next.status,
         builder: (context, state) {
           return MaterialApp.router(
-            title: 'Massanger',
+            title: 'MessengerX',
             debugShowCheckedModeBanner: false,
             theme: AppTheme.light(),
             darkTheme: AppTheme.dark(),

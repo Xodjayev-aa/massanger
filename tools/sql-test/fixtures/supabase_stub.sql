@@ -1,5 +1,5 @@
 -- =============================================================================
--- Minimal Supabase surface: just enough for the Massanger migrations to run on
+-- Minimal Supabase surface: just enough for the MessengerX migrations to run on
 -- a vanilla Postgres (used by `tools/sql-test` in CI). Never ship this to a
 -- real project — the hosted platform already provides all of it.
 -- =============================================================================

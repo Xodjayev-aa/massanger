@@ -25,7 +25,7 @@ const CHAT = '33333333-3333-4333-8333-333333333333';
 // The marker the seed uses to separate "create accounts" from "demo content".
 const SPLIT_AT = '-- The direct chat.';
 
-const pg = await PGlite.create({ name: 'massanger-seedcheck' });
+const pg = await PGlite.create({ name: 'messengerx-seedcheck' });
 const exec = async (sql) => pg.exec(sql);
 const scalar = async (sql) => Object.values((await pg.query(sql)).rows[0] ?? {})[0];
 

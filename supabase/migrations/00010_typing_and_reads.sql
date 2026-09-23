@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00010_typing_and_reads.sql
--- Massanger — presence (typing) in both directions, and app→Telegram read
+-- MessengerX — presence (typing) in both directions, and app→Telegram read
 -- receipts.
 --
 -- Why a table and not Realtime broadcast only: a broadcast event is gone if the
@@ -17,7 +17,7 @@
 -- Direction B (Telegram → app): `updateUserChatAction` for a private mirror chat
 -- becomes a row with source='telegram'; the app shows "… is typing" for the
 -- mirrored peer. Group chats are deliberately excluded: Telegram's per-member
--- typing would need a peer identity that is not a Massanger account, and a
+-- typing would need a peer identity that is not a MessengerX account, and a
 -- single "someone is typing" indicator in a group is misleading.
 --
 -- Read receipts: `mark_chat_read()` already advances chat_participants; the
@@ -52,7 +52,7 @@ alter table public.telegram_chats
   add column if not exists reads_synced_at   timestamptz;
 
 comment on column public.telegram_chats.last_app_read_id is
-  'Highest Telegram message id the owner has read in Massanger; drives viewMessages().';
+  'Highest Telegram message id the owner has read in MessengerX; drives viewMessages().';
 
 -- ---------------------------------------------------------------------------
 -- client-side helpers
@@ -328,7 +328,7 @@ begin
 end;
 $$;
 
--- Reading Telegram on another device must clear the badge in Massanger. The
+-- Reading Telegram on another device must clear the badge in MessengerX. The
 -- bridge sees `updateReadInboxChatHistory` (we read the chat) and calls this; it
 -- mirrors mark_chat_read() but is driven by a Telegram message id.
 create or replace function public.bridge_mark_inbox_read(

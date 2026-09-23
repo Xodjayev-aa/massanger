@@ -67,4 +67,4 @@ build/
 tools/sql-test/.pgdata/
 
 # Local dart-define file created by `make env` (never commit a real anon key).
-.massanger/
+.messengerx/

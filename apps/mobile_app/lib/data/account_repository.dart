@@ -38,7 +38,7 @@ class AccountRepository {
   /// Supabase → Auth → URL Configuration (hosted), and mirrored by the intent filter
   /// / `CFBundleURLTypes` entry the app's README asks for. Without it the browser
   /// completes the flow somewhere the app never hears about.
-  static const String _nativeCallback = 'com.massanger.app://login-callback';
+  static const String _nativeCallback = 'com.messengerx.app://login-callback';
 
   Future<void> signInWithGoogle() async {
     try {
@@ -96,7 +96,7 @@ class AccountRepository {
           .select('id, username, display_name, avatar_path, avatar_external_url, bio, telegram_username, is_online, last_seen_at')
           .eq('id', userId)
           .maybeSingle();
-      if (row == null) throw const AppException('not_found', 'No such person in Massanger.');
+      if (row == null) throw const AppException('not_found', 'No such person in MessengerX.');
       return DirectoryEntry.fromMap(Map<String, dynamic>.from(row));
     } catch (error, stack) {
       throw AppException.wrap(error, stack);
@@ -247,7 +247,7 @@ class EligibilityResult {
     if (passed) return 'Account verified';
     if (accountAgeDays != null) {
       return 'Your Google account is $accountAgeDays day${accountAgeDays == 1 ? '' : 's'} old. '
-          'Massanger needs at least $minAgeDays days.';
+          'MessengerX needs at least $minAgeDays days.';
     }
     return reason.isEmpty ? 'We could not confirm your account age yet.' : reason;
   }

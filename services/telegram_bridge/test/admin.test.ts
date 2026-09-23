@@ -101,19 +101,19 @@ describe('admin server', () => {
     const text = await response.text();
     for (const line of text.split('\n')) {
       if (line === '' || line.startsWith('#')) continue;
-      assert.match(line, /^massanger_bridge_[a-z_]+(\{[^\n]*\})? [0-9.]+$/, `unparsable metric: ${line}`);
+      assert.match(line, /^messengerx_bridge_[a-z_]+(\{[^\n]*\})? [0-9.]+$/, `unparsable metric: ${line}`);
     }
-    assert.match(text, /^massanger_bridge_up 1$/m);
-    assert.match(text, /^massanger_bridge_sessions 0$/m);
-    assert.match(text, /^massanger_bridge_max_sessions \d+$/m);
+    assert.match(text, /^messengerx_bridge_up 1$/m);
+    assert.match(text, /^messengerx_bridge_sessions 0$/m);
+    assert.match(text, /^messengerx_bridge_max_sessions \d+$/m);
     // Counters an on-call dashboard filters on.
-    assert.match(text, /^massanger_bridge_sent_total 0$/m);
+    assert.match(text, /^messengerx_bridge_sent_total 0$/m);
   });
 
   it('renders metrics for a running manager without throwing', () => {
     const rendered = renderPrometheus(harness.manager);
     assert.ok(rendered.endsWith('\n'), 'Prometheus expects a trailing newline');
-    assert.equal(rendered.split('\n')[0], '# TYPE massanger_bridge_up gauge');
+    assert.equal(rendered.split('\n')[0], '# TYPE messengerx_bridge_up gauge');
   });
 
   it('lists sessions for operators', async () => {

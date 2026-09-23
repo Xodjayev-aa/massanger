@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00006_app_rpc.sql
--- Massanger — the RPC surface consumed by the Flutter client.
+-- MessengerX — the RPC surface consumed by the Flutter client.
 --
 -- Rules of thumb used here:
 --   * read paths are SECURITY INVOKER ⇒ RLS is the authorisation layer;
@@ -172,7 +172,7 @@ as $$
         case when p2.username is not null then '@' || p2.username else null end,
         tp.display_name,
         tp.username,
-        'Massanger chat'
+        'MessengerX chat'
       ) as resolved_title,
       p2.id            as peer_id,
       p2.username      as peer_username,

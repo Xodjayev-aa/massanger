@@ -1,4 +1,4 @@
-# Massanger runbook
+# MessengerX runbook
 
 Operational truth for this repository: how to get it running, what has to be
 provisioned outside the repo, and what to do when Telegram stops syncing.
@@ -38,7 +38,7 @@ Cloud project, and one Google Cloud project is enough for the whole feature:
    `userinfo`/`tokeninfo` (`GOOGLE_WEB_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` in
    `supabase/functions/.env.local`).
 2. **iOS** client (`GOOGLE_IOS_CLIENT_ID`) — its bundle id must be
-   `com.massanger.app`, and it must list the web client as an *embedded* client or
+   `com.messengerx.app`, and it must list the web client as an *embedded* client or
    `sign-in-with-google` on iOS will mint an ID token our server refuses.
 3. **Android** client (`GOOGLE_ANDROID_CLIENT_ID`) — needs the debug *and* release
    SHA-1 fingerprints; a missing fingerprint is the single most common cause of
@@ -98,7 +98,7 @@ You need: Node ≥ 20.11 (22 recommended), Flutter ≥ 3.24 with the Dart SDK it
 the Supabase CLI ≥ 2.0, Docker, and `make`.
 
 ```bash
-git clone <this repo> && cd massanger
+git clone <this repo> && cd messengerx
 make bootstrap        # npm ci + flutter pub get + creates the .env files
 ```
 
@@ -108,7 +108,7 @@ make bootstrap        # npm ci + flutter pub get + creates the .env files
   `config.toml` interpolates for Auth.
 - `supabase/functions/.env.local` — the four functions' runtime environment.
 - `services/telegram_bridge/.env` — the worker's environment.
-- `.massanger/app.json` — the `--dart-define` values the app builds with.
+- `.messengerx/app.json` — the `--dart-define` values the app builds with.
 
 Start the stack:
 
@@ -135,7 +135,7 @@ Studio      http://127.0.0.1:54323
 | `services/telegram_bridge/.env` | `SUPABASE_URL`, both keys | same values |
 | | `SEAL_KEY`, `BRIDGE_HMAC_SECRET`, `BRIDGE_TOKEN` | must equal the function's values |
 | | `BRIDGE_BASE_URL` | `http://host.docker.internal:8787` (a function in Docker cannot reach `localhost`) |
-| `.massanger/app.json` | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | API URL + anon key |
+| `.messengerx/app.json` | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | API URL + anon key |
 
 Migrations and `seed.sql` are applied by `supabase start` (and by
 `supabase db reset`, which is the check CI runs against PGlite):
@@ -174,7 +174,7 @@ Realtime endpoint, i.e. a hosted Supabase project (§4) or Docker. There is no s
 
 ### 3.1 Provisioning
 
-1. Google Cloud console → new project, e.g. `massanger-prod`.
+1. Google Cloud console → new project, e.g. `messengerx-prod`.
 2. **OAuth consent screen**: External, add the scopes
    `gmail.readonly`, `drive.metadata.readonly`, plus the OpenID ones. Publish
    "Testing" while developing (≤ 100 test users, 7-day refresh tokens) and
@@ -188,7 +188,7 @@ Realtime endpoint, i.e. a hosted Supabase project (§4) or Docker. There is no s
    Gmail `users.getProfile` (`msgTotal`/`totalBytes` are not read) and Drive
    `about.get`'s creation time, so the consent text can stay short.
 5. In Supabase: **Auth → Providers → Google**, paste the *web* client id/secret.
-   Set **Auth → URL Configuration** → Site URL `io.massanger.app://login-callback`
+   Set **Auth → URL Configuration** → Site URL `io.messengerx.app://login-callback`
    handling via `additional_redirect_urls` (already in `config.toml` for local).
 
 ### 3.2 What the gate actually decides
@@ -245,7 +245,7 @@ the gate screen disappears; then set it back to 366.
 
 ```bash
 supabase login
-supabase projects create massanger        # note the ref, e.g. abcdef12345
+supabase projects create messengerx        # note the ref, e.g. abcdef12345
 # → write it into supabase/.env (SUPABASE_PROJECT_REF), then:
 make link                                 # supabase link + db push (asks for the DB password)
 supabase secrets set \
@@ -261,7 +261,7 @@ supabase secrets set \
   BRIDGE_HMAC_SECRET="$(openssl rand -hex 32)" \
   BRIDGE_TOKEN="$(openssl rand -hex 32)" \
   BRIDGE_BASE_URL=https://bridge.internal.yourdomain \
-  ALLOWED_ORIGINS=https://<ref>.supabase.co,io.massanger.app,com.massanger.app
+  ALLOWED_ORIGINS=https://<ref>.supabase.co,io.messengerx.app,com.messengerx.app
 make deploy                               # db push + the four functions
 ```
 
@@ -300,7 +300,7 @@ read receipts and FLOOD_WAIT parking all behave as they do against the real thin
 ```
 POST /healthz   → {"status":"ok","transport":"memory",…}
 GET  /readyz    → 200 once sessions are restored; 503 while starting
-GET  /metrics   → Prometheus text, prefix massanger_bridge_*
+GET  /metrics   → Prometheus text, prefix messengerx_bridge_*
 POST /internal/wake  {"user_id":"<uuid>"}   # only with Bearer + HMAC
 ```
 
@@ -334,11 +334,11 @@ What to check when you do this for real (the CI suite cannot):
 
 1. `telegram_accounts.auth_state = linked` and `last_inbound_at` advancing within ~3 s
    of a new Telegram message in a synced chat.
-2. A message sent from Massanger appears in Telegram with the same text, and the app
+2. A message sent from MessengerX appears in Telegram with the same text, and the app
    bubble turns single-tick → double-tick → (after you read it in Telegram) read.
 3. `tg_outbox` for that message reaches `delivered` — not stuck at `sent`. A row parked
    because of `FLOOD_WAIT_n` shows `leased_until` in the future and retries itself.
-4. Reading the chat in *Telegram* clears the Massanger badge (the reverse of #2).
+4. Reading the chat in *Telegram* clears the MessengerX badge (the reverse of #2).
 5. Kill the worker (`^C`) and restart it: sessions are restored from `BRIDGE_DATA_DIR`,
    the link is still valid, and nothing is double-posted (idempotency is
    `(chat_id, source, tg_message_id)` for inbound and `dedupe_key` for outbound).
@@ -375,7 +375,7 @@ What to check when you do this for real (the CI suite cannot):
   keeps users logged in to Telegram across a redeploy: back it up like TLS keys,
   restore it before scaling a shard, and treat loss as "everyone re-links" (the app
   detects `needs_reauth` and says so).
-- **No local database for the app.** Massanger keeps its state in Postgres; the app's
+- **No local database for the app.** MessengerX keeps its state in Postgres; the app's
   offline behaviour is "cached in memory for the session", not a local store. That is
   a product decision, not an oversight.
 
@@ -385,7 +385,7 @@ What to check when you do this for real (the CI suite cannot):
 
 ### 7.1 Signals
 
-`GET /metrics` (Prometheus, `massanger_bridge_*`) plus logs (pino JSON). The ones to
+`GET /metrics` (Prometheus, `messengerx_bridge_*`) plus logs (pino JSON). The ones to
 alert on:
 
 | Metric / log | Alert when | It means |
@@ -451,7 +451,7 @@ stayed there, the user's device never completed the flow — that is a UX questi
 incident. Credentials never live in those rows: the payload column holds the AES-GCM
 envelope `{alg,iv,ct}` and the guard forbids reading a plaintext back out, so an
 expired request leaks nothing. (A `plain` envelope is only accepted when
-`MASSANGER_ENV=development`; the bridge refuses it in production and the app's link
+`MESSENGERX_ENV=development`; the bridge refuses it in production and the app's link
 screen shows a loud warning instead of pretending to be safe.)
 
 **B. Media uploaded but the bubble is broken.** The bucket layout is enforced by the
@@ -542,13 +542,13 @@ is the "does this boot a real Supabase" half.
 
 | Symptom | First thing to check | Then |
 | --- | --- | --- |
-| App boots straight to a red "build not configured" | `SUPABASE_URL`/`SUPABASE_ANON_KEY` in `.massanger/app.json` | `appEnv.validate()` fails loudly by design — no default project is baked in |
+| App boots straight to a red "build not configured" | `SUPABASE_URL`/`SUPABASE_ANON_KEY` in `.messengerx/app.json` | `appEnv.validate()` fails loudly by design — no default project is baked in |
 | Sign-in spins, then "Google refused" | Android SHA-1 / iOS bundle id registered on the client | Supabase → Auth → Google provider enabled; redirect URI registered in Google |
 | Signed in, stuck on the gate screen | `select access_state, access_state_reason from profiles where id = …` | `AGE_GATE_ON_FAILURE=deny` during a Google outage; 5 failed attempts locks until an admin clears it |
 | Gate says "recheck" forever | `eligibility_checks.checked_at` vs `ELIGIBILITY_CACHE_DAYS` | Gmail grant revoked → `needs_reauth` is correct; re-consent |
 | No live messages, but pull-to-refresh works | Realtime channel in the logs; `PostgresChangeFilter` on `chat_id` | publication membership (00008) and the member policy; a chat row for a non-member streams nothing |
 | Voice note records, then the bubble shows a retry arrow | `images`/`voice-notes` upload policy: folder must be the **chat** uuid | the 10 MiB limit; `duration_ms`/`waveform` shape (`22023` = media contract) |
-| Message says "attachment not in a shape Massanger accepts" | `app.validate_message_media` (`00004`) | the client is constructing media the contract does not include — fix the client, do not widen the validator for a UI convenience |
+| Message says "attachment not in a shape MessengerX accepts" | `app.validate_message_media` (`00004`) | the client is constructing media the contract does not include — fix the client, do not widen the validator for a UI convenience |
 | Sends work, reads never arrive | `telegram_accounts.last_inbound_at`; `TD_VERBOSITY=2` | ingest 401s (HMAC/skew) or `INGEST_MODE` mismatch |
 | Everything stalls after a deploy | `/readyz` 503? `BRIDGE_DATA_DIR` mounted? | `TDLIB_DB_KEY` changed → sessions unreadable → all accounts `needs_reauth` |
 | Bridge restart loop | startup validation output (it refuses to boot with a weak/missing secret, on purpose) | `openssl rand -hex 32` for the three trust secrets |
@@ -556,7 +556,7 @@ is the "does this boot a real Supabase" half.
 
 Admin surface on purpose: the bridge exposes **only**
 `GET /healthz`, `GET /readyz`, `GET /metrics`, `GET /sessions` (counts, no identifiers
-unless `MASSANGER_ENV != production`) and `POST /internal/wake`. There is no "resync
+unless `MESSENGERX_ENV != production`) and `POST /internal/wake`. There is no "resync
 this user" HTTP verb: resync by writing the row that makes the worker pick it up, so
 every admin action is auditable in the same table as everything else.
 

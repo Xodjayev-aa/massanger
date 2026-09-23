@@ -28,7 +28,7 @@ async function main(): Promise<number> {
 
   const log = initLogger(config.logLevel, {
     worker: config.workerId,
-    env: config.massangerEnv,
+    env: config.messengerxEnv,
     transport: config.transport,
   });
 

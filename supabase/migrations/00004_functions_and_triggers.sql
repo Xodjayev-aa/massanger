@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00004_functions_and_triggers.sql
--- Massanger — invariants, projections and RLS helpers.
+-- MessengerX — invariants, projections and RLS helpers.
 --
 -- Everything the UI needs to stay consistent is derived in-database:
 --   * sender snapshot stamped on write (no joins in the feed query)
@@ -394,7 +394,7 @@ begin
   new.search_tsv := to_tsvector('simple', coalesce(new.body, ''));
 
   if new.kind = 'system' then
-    new.sender_name   := coalesce(nullif(btrim(new.sender_name), ''), 'Massanger');
+    new.sender_name   := coalesce(nullif(btrim(new.sender_name), ''), 'MessengerX');
     new.state         := 'read';
     new.sent_at       := coalesce(new.sent_at, new.created_at);
     new.delivered_at  := new.sent_at;
@@ -411,7 +411,7 @@ begin
     new.sender_name        := coalesce(nullif(btrim(new.sender_name), ''),
                                        nullif(btrim(v_profile.display_name), ''),
                                        v_profile.username,
-                                       'Massanger');
+                                       'MessengerX');
     new.sender_avatar_path := coalesce(new.sender_avatar_path, v_profile.avatar_path);
 
     -- Eligibility is enforced here as well as in RLS: the bridge writes with
@@ -634,7 +634,7 @@ language plpgsql
 set search_path = pg_catalog, public
 as $$
 declare
-  v_channel text := coalesce(nullif(btrim(array_to_string(TG_ARGV, ',')), ''), 'massanger_bridge');
+  v_channel text := coalesce(nullif(btrim(array_to_string(TG_ARGV, ',')), ''), 'messengerx_bridge');
   v_id      text;
 begin
   if tg_op = 'DELETE' then
@@ -660,12 +660,12 @@ $$;
 drop trigger if exists telegram_outbox_notify on public.telegram_outbox;
 create trigger telegram_outbox_notify
   after insert on public.telegram_outbox
-  for each row execute function app.notify_bridge('massanger_outbox');
+  for each row execute function app.notify_bridge('messengerx_outbox');
 
 drop trigger if exists telegram_link_requests_notify on public.telegram_link_requests;
 create trigger telegram_link_requests_notify
   after insert or update of status, step on public.telegram_link_requests
-  for each row execute function app.notify_bridge('massanger_link');
+  for each row execute function app.notify_bridge('messengerx_link');
 
 drop trigger if exists telegram_outbox_touch on public.telegram_outbox;
 create trigger telegram_outbox_touch

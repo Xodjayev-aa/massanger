@@ -19,7 +19,7 @@ class ChatsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Massanger'),
+        title: const Text('MessengerX'),
         actions: <Widget>[
           IconButton(
             tooltip: 'Search',

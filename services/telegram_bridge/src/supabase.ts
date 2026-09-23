@@ -121,7 +121,7 @@ export class SupabaseBridge {
       accept: 'application/json',
      apikey: config.serviceRoleKey,
       authorization: `Bearer ${config.serviceRoleKey}`,
-      'x-application-name': 'massanger-bridge',
+      'x-application-name': 'messengerx-bridge',
     };
   }
 

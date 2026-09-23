@@ -104,7 +104,7 @@ class _ProfileView extends StatelessWidget {
                         builder: (dialogContext) => AlertDialog(
                           title: const Text('Sign out?'),
                           content: const Text(
-                            'If Telegram is linked, Massanger unlinks it too so the bridge stops reading your chats. '
+                            'If Telegram is linked, MessengerX unlinks it too so the bridge stops reading your chats. '
                             'Your messages stay on the server.',
                           ),
                           actions: <Widget>[

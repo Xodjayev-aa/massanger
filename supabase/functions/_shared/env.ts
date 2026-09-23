@@ -1,5 +1,5 @@
 /**
- * Typed, fail-fast configuration for the Massanger edge functions.
+ * Typed, fail-fast configuration for the MessengerX edge functions.
  *
  * Every secret is read from the runtime environment (`supabase secrets set`),
  * never from a file, and never echoed back into a response or a log line.
@@ -67,7 +67,7 @@ const list = (name: string, fallback: string[] = []): string[] => {
 };
 
 export function readEnv(): Env {
-  const environment = (str('MASSANGER_ENV', 'production') ?? 'production') as Env['environment'];
+  const environment = (str('MESSENGERX_ENV', 'production') ?? 'production') as Env['environment'];
   const primary = str('GOOGLE_CLIENT_ID');
   return {
     supabaseUrl: (str('SUPABASE_URL') ?? 'http://host.docker.internal:54321').replace(/\/+$/, ''),

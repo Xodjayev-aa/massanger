@@ -13,13 +13,13 @@ import type { AccountContext, LinkClaim, OutboxRow } from '../src/supabase.js';
 export const HEX_KEY = '0f'.repeat(32);
 
 export function testEnv(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
-  const dir = mkdtempSync(path.join(tmpdir(), 'massanger-bridge-'));
+  const dir = mkdtempSync(path.join(tmpdir(), 'messengerx-bridge-'));
   const env: Record<string, string> = {
     SUPABASE_URL: 'https://project.example.supabase.co',
     // Both must clear the min(20) length rule the real loader enforces.
     SUPABASE_SERVICE_ROLE_KEY: 'service-role-key-for-tests-only',
     SUPABASE_ANON_KEY: 'anon-key-for-tests-only-ok',
-    MASSANGER_ENV: 'development',
+    MESSENGERX_ENV: 'development',
     BRIDGE_TRANSPORT: 'memory',
     BRIDGE_DATA_DIR: dir,
     BRIDGE_HEALTH_PORT: '0',

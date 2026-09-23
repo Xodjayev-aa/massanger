@@ -57,7 +57,7 @@ class _SignInPageState extends State<SignInPage> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Massanger links an existing Telegram account and mirrors it, two ways, '
+                    'MessengerX links an existing Telegram account and mirrors it, two ways, '
                     'on your terms. Sign in with Google — we only check how old the account is.',
                     style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
@@ -75,7 +75,7 @@ class _SignInPageState extends State<SignInPage> {
                   ],
                   const SizedBox(height: 24),
                   Text(
-                    'No Google account older than a year, no Massanger. That is the whole rule, '
+                    'No Google account older than a year, no MessengerX. That is the whole rule, '
                     'and it is checked on the server.',
                     style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     textAlign: TextAlign.center,
@@ -108,7 +108,7 @@ class _Wordmark extends StatelessWidget {
           child: Icon(Icons.forum_rounded, color: theme.colorScheme.onPrimary, size: 24),
         ),
         const SizedBox(width: 12),
-        Text('Massanger', style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
+        Text('MessengerX', style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
       ],
     );
   }

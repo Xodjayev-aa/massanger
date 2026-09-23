@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00001_core_types.sql
--- Massanger — enums, extensions, shared helper functions (idempotent).
+-- MessengerX — enums, extensions, shared helper functions (idempotent).
 --
 -- Design notes
 --   * We deliberately avoid optional extensions (citext, pgcrypto, pg_trgm) so
@@ -12,7 +12,7 @@
 -- =============================================================================
 
 create schema if not exists app;
-comment on schema app is 'Internal Massanger helpers (not exposed through PostgREST).';
+comment on schema app is 'Internal MessengerX helpers (not exposed through PostgREST).';
 
 -- ---------------------------------------------------------------------------
 -- Enums

@@ -22,7 +22,7 @@ Future<void> main() async {
     FlutterError.presentError(details);
     // Replace with the crash reporter of choice (Sentry/Crashlytics); the shape of
     // the error is what matters, and it must never include request bodies.
-    debugPrint('massanger: ${details.exceptionAsString()}');
+    debugPrint('messengerx: ${details.exceptionAsString()}');
   };
 
   try {
@@ -49,7 +49,7 @@ Future<void> main() async {
     return;
   }
 
-  runApp(const MassangerApp());
+  runApp(const MessengerXApp());
 }
 
 /// Shown when the build itself is broken (missing `--dart-define`), so a
@@ -70,7 +70,7 @@ class _FatalErrorApp extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                const Text('Massanger cannot start', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                const Text('MessengerX cannot start', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 12),
                 Text(error, style: const TextStyle(fontFamily: 'monospace')),
                 const SizedBox(height: 24),

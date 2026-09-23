@@ -14,7 +14,7 @@ import 'widgets.dart';
 
 /// Start a direct chat by username.
 ///
-/// There is no contact graph and no phone-number lookup in Massanger: a username is
+/// There is no contact graph and no phone-number lookup in MessengerX: a username is
 /// the only handle, which keeps `directory` small enough to search without an
 /// index that leaks who-knows-whom.
 class NewChatPage extends StatefulWidget {
@@ -128,7 +128,7 @@ class _NewChatPageState extends State<NewChatPage> {
                           child: Text(
                             _controller.text.trim().length < 2
                                 ? 'Type at least two characters.'
-                                : 'Nobody by that name is on Massanger yet.',
+                                : 'Nobody by that name is on MessengerX yet.',
                             style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                           ),
                         )

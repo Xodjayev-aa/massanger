@@ -1,5 +1,5 @@
 /**
- * The slice of the Deno runtime surface Massanger's edge functions touch.
+ * The slice of the Deno runtime surface MessengerX's edge functions touch.
  *
  * Supabase Edge Functions run on Deno, where these globals exist natively. We
  * declare them here so `tsc` can typecheck the functions in environments that

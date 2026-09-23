@@ -1,7 +1,7 @@
 /**
  * Google account-age evidence.
  *
- * The rule Massanger enforces at registration: a Google identity must be at
+ * The rule MessengerX enforces at registration: a Google identity must be at
  * least `minAgeDays` old. Signals, in descending trust order:
  *
  *   1. Gmail `users/getProfile.initialData.time` — the timestamp Gmail was
@@ -314,7 +314,7 @@ export async function evaluateAccountAge(options: {
       minAgeDays: options.minAgeDays,
       signals,
       reason:
-        'No Google account-age signal was readable. Make sure Massanger was granted Gmail/Drive metadata access, then retry.',
+        'No Google account-age signal was readable. Make sure MessengerX was granted Gmail/Drive metadata access, then retry.',
     };
   }
 

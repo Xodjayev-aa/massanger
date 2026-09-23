@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00007_bridge_rpc.sql
--- Massanger — the contract the TDLib worker uses. Granted to service_role only.
+-- MessengerX — the contract the TDLib worker uses. Granted to service_role only.
 --
 -- Why RPCs instead of letting the worker write tables directly:
 --   * one place owns the idempotency rules (tg_message_id / tg_send_id /
@@ -196,7 +196,7 @@ exception when unique_violation then
      set status = 'failed', error = 'telegram_account_linked_to_another_user',
          payload = null, completed_at = clock_timestamp()
    where lr.id = p_request_id;
-  raise exception 'this Telegram account is already linked to another Massanger user'
+  raise exception 'this Telegram account is already linked to another MessengerX user'
     using errcode = '23505';
 end;
 $$;
@@ -512,7 +512,7 @@ begin
     );
 
     -- Resolve the snapshot here: the row must render even if the profile of a
-    -- mirrored sender never existed in Massanger.
+    -- mirrored sender never existed in MessengerX.
     select coalesce(nullif(btrim(tp.display_name), ''), tp.username, v_sender_name),
            coalesce(tp.avatar_external_url, v_sender_avatar)
       into v_sender_name, v_sender_avatar

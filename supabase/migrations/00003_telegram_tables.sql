@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00003_telegram_tables.sql
--- Massanger — the Telegram bridge control plane.
+-- MessengerX — the Telegram bridge control plane.
 --
 -- Topology (see docs/architecture.md):
 --
@@ -121,7 +121,7 @@ create index if not exists telegram_link_requests_user_idx
   on public.telegram_link_requests (user_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
--- telegram_chats — mapping table: Telegram chat ↔ Massanger chat, per owner.
+-- telegram_chats — mapping table: Telegram chat ↔ MessengerX chat, per owner.
 -- Also stores the per-chat sync toggle (the "sync this chat" switch).
 -- ---------------------------------------------------------------------------
 create table if not exists public.telegram_chats (

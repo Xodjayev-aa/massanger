@@ -7,14 +7,14 @@
 #
 # Secrets are read from services/telegram_bridge/.env, which `make env` creates.
 
-name: massanger
+name: messengerx
 
 services:
   bridge:
     build:
       context: ../services/telegram_bridge
       dockerfile: Dockerfile
-    image: massanger/telegram-bridge:local
+    image: messengerx/telegram-bridge:local
     restart: unless-stopped
     env_file:
       - ../services/telegram_bridge/.env
@@ -23,14 +23,14 @@ services:
       # has in their .env for a hosted deployment.
       BRIDGE_HEALTH_HOST: 0.0.0.0
       BRIDGE_BASE_URL: http://bridge:8787
-      MASSANGER_ENV: ${MASSANGER_ENV:-staging}
+      MESSENGERX_ENV: ${MESSENGERX_ENV:-staging}
       # With a sidecar, TDLib lives in its own container; with `koffi` the bridge
       # loads /usr/local/lib/libtdjson.so from its own image.
       BRIDGE_TRANSPORT: ${BRIDGE_TRANSPORT:-memory}
     ports:
       - "8787:8787"          # /healthz, /readyz, /metrics, /internal/wake
     volumes:
-      - bridge-sessions:/var/lib/massanger-bridge
+      - bridge-sessions:/var/lib/messengerx-bridge
     depends_on:
       - tdlib
     healthcheck:

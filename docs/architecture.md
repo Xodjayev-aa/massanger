@@ -1,4 +1,4 @@
-# Massanger architecture
+# MessengerX architecture
 
 One page for the contracts, so nobody has to read eleven migrations to change
 something. The operational side (provisioning, incidents) is in
@@ -33,9 +33,9 @@ moment someone adds them. Row-level security is the second line, not the first.
 p_reply_to_id, p_client_message_id)` runs as the caller, checks
 `app.sender_may_post`, snapshots the sender's display name, validates `p_media` against
 `app.validate_message_media` (errors as SQLSTATE `22023`, which the client renders as
-"attachment not in a shape Massanger accepts"), and — if the chat mirrors to Telegram —
+"attachment not in a shape MessengerX accepts"), and — if the chat mirrors to Telegram —
 inserts the `tg_outbox` row **in the same transaction**. That atomicity is the whole
-point: there is no window where a message exists in Massanger but was never going to be
+point: there is no window where a message exists in MessengerX but was never going to be
 sent. The client already showed an optimistic bubble keyed by `client_message_id`; the
 RPC returns the real row and the client *replaces in place* when the realtime echo
 arrives, matched on `client_message_id`, never on content.
@@ -62,8 +62,8 @@ advanced only by monotonic rank (`app.delivery_state_rank`) with one exception a
 trigger enforces: anything may move to `failed`. A client never writes a receipt; it
 calls `mark_messages_delivered(p_message_ids)`, which only marks *other people's*
 messages in chats the caller belongs to, and reads are `mark_chat_read`. In Telegram
-terms: reading in Massanger produces `viewMessages`, reading in Telegram clears the
-Massanger badge — the same event through the inbound path.
+terms: reading in MessengerX produces `viewMessages`, reading in Telegram clears the
+MessengerX badge — the same event through the inbound path.
 
 ## Presence
 
@@ -124,7 +124,7 @@ is the only global.
 5. Triggers enforce what a client could otherwise race (sender snapshot, `search_tsv`,
    unique direct pair, delivery rank, profile field guards).
 6. Secrets fail closed at startup and the app refuses to look safe when it is not
-   (`MASSANGER_ENV=production` rejects a `plain` link envelope; the bridge refuses
+   (`MESSENGERX_ENV=production` rejects a `plain` link envelope; the bridge refuses
    short trust values).
 
 ## Testing

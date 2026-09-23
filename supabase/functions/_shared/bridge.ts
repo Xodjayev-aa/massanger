@@ -22,7 +22,7 @@ export type WakeHint = {
 export async function wakeBridge(env: Env, hint: WakeHint): Promise<boolean> {
   if (!env.bridgeBaseUrl) return false;
   const body = JSON.stringify({ ...hint, at: new Date().toISOString() });
-  const headers: Record<string, string> = { 'content-type': 'application/json', 'user-agent': 'massanger-edge' };
+  const headers: Record<string, string> = { 'content-type': 'application/json', 'user-agent': 'messengerx-edge' };
 
   if (env.bridgeToken) headers['authorization'] = `Bearer ${env.bridgeToken}`;
   if (env.bridgeHmacSecret) {

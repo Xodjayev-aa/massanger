@@ -1,4 +1,4 @@
--- Massanger — local demo data. Applied by `supabase db reset` (config.toml →
+-- MessengerX — local demo data. Applied by `supabase db reset` (config.toml →
 -- [db.seed]); never run in production, and CI does not run it either, because it
 -- intentionally uses the auth schema that only exists on a real Supabase instance.
 --
@@ -16,7 +16,7 @@ begin;
 
 -- Both accounts are seeded as email identities, which `handle_new_user()` marks
 -- `active` immediately; a Google identity would sit in `pending_verification`
--- until the age gate passes. Password for both is "massanger" (local only).
+-- until the age gate passes. Password for both is "messengerx" (local only).
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
   raw_app_meta_data, raw_user_meta_data, created_at, updated_at, is_sso_user
@@ -26,7 +26,7 @@ values
     '00000000-0000-0000-0000-000000000000',
     '11111111-1111-4111-8111-111111111111',
     'authenticated', 'authenticated', 'aziz@example.test',
-    extensions.crypt('massanger', extensions.gen_salt('bf', 10)),
+    extensions.crypt('messengerx', extensions.gen_salt('bf', 10)),
     now(),
     '{"provider":"email","providers":["email"]}'::jsonb,
     '{"full_name":"Aziz Xodjayev"}'::jsonb,
@@ -36,7 +36,7 @@ values
     '00000000-0000-0000-0000-000000000000',
     '22222222-2222-4222-8222-222222222222',
     'authenticated', 'authenticated', 'dilnoza@example.test',
-    extensions.crypt('massanger', extensions.gen_salt('bf', 10)),
+    extensions.crypt('messengerx', extensions.gen_salt('bf', 10)),
     now(),
     '{"provider":"email","providers":["email"]}'::jsonb,
     '{"full_name":"Dilnoza Karimova"}'::jsonb,

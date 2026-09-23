@@ -3,7 +3,7 @@
 // failure copy and the URL derivation that Realtime depends on.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:massanger_app/core/env.dart';
+import 'package:messengerx_app/core/env.dart';
 
 void main() {
   const configured = AppEnv(

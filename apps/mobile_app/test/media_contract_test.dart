@@ -5,8 +5,8 @@
 // to explain why. These assertions mirror the validator's checks exactly.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:massanger_app/core/waveform.dart';
-import 'package:massanger_app/data/models.dart';
+import 'package:messengerx_app/core/waveform.dart';
+import 'package:messengerx_app/data/models.dart';
 
 /// The buckets the validator accepts (00004), which are also the only ones the
 /// storage policies in 00008 created.
@@ -90,7 +90,10 @@ void main() {
     test('a mirrored Telegram image may be url-only', () {
       const ImageMedia external = ImageMedia(url: 'https://cdn.example.test/1.jpg', width: 800, height: 600);
       final Map<String, Object?> map = external.toMap();
-      expect(map.containsKey('path'), isFalse, reason: 'no storage object to point at');
+      // `path` is written as an explicit null rather than dropped, which is what the
+      // validator wants: `p_media ? 'path' or p_media ? 'url'` checks for a key, and a
+      // mirrored row has a url and no storage object.
+      expect(map['path'], isNull, reason: 'no storage object to point at');
       expect(map['url'], 'https://cdn.example.test/1.jpg');
       expect(external.isExternal, isTrue);
       expect(external.aspectRatio, closeTo(800 / 600, 0.001));

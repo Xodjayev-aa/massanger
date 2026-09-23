@@ -454,7 +454,7 @@ export class TelegramSession {
   /**
    * TDLib needs a Telegram chat id. `bridge_claim_outbox` already coalesces it
    * from `chats.tg_peer_id`, so a null here means the chat has no Telegram
-   * counterpart yet (e.g. a Massanger-only group) and the row is parked, not
+   * counterpart yet (e.g. a MessengerX-only group) and the row is parked, not
    * failed — a later `telegram_set_chat_sync` will make it sendable.
    */
   async #ensureTgChat(row: OutboxRow): Promise<string | null> {
@@ -708,7 +708,7 @@ export class TelegramSession {
     const info = this.#chats.get(chatId);
     if (!info || !info.chatId) {
       // Unknown chat: resolve it first (this is how a new Telegram conversation
-      // appears in Massanger without the user doing anything).
+      // appears in MessengerX without the user doing anything).
       const chat = await this.client.request<TdObject>('getChat', { chat_id: chatId }).catch(() => null);
       if (chat) await this.#registerChat(chat, { silent: true });
     }
@@ -813,7 +813,7 @@ export class TelegramSession {
     message: TdObject,
     chatId: string,
     messageId: string | number,
-    massangerChatId: string | null,
+    messengerxChatId: string | null,
   ): Promise<Map<number, UploadedMedia> | null> {
     const content = (message.content ?? {}) as TdObject;
     const type = String(content['@type'] ?? '');
@@ -869,11 +869,11 @@ export class TelegramSession {
     // segment as a chat id (`is_chat_member(folder, viewer)`) so every member of
     // the conversation — and only they — can fetch the object. A chat we could not
     // resolve yet gets no upload; the message still mirrors with its placeholder.
-    if (!massangerChatId) {
+    if (!messengerxChatId) {
       this.log.debug('telegram media not uploaded: chat is not mirrored yet', { tg_chat_id: chatId });
       return null;
     }
-    const objectPath = `${massangerChatId}/tg/${chatId}-${String(messageId)}${ext}`;
+    const objectPath = `${messengerxChatId}/tg/${chatId}-${String(messageId)}${ext}`;
     try {
       await this.options.db.upload(bucket, objectPath, bytes, contentType);
       this.counters.uploads++;

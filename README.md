@@ -1,9 +1,9 @@
-# Massanger
+# MessengerX
 
 A private messenger with a real Telegram body: your chats live in Postgres behind
 row-level security, and a TDLib userbot keeps your personal Telegram account mirrored in
 both directions — inbound messages and media into the same `messages` table you already
-read, outbound messages from Massanger into Telegram as if you had typed them there.
+read, outbound messages from MessengerX into Telegram as if you had typed them there.
 
 Flutter + Supabase + a long-lived Node worker. No Telegram Bot API: a bot cannot read
 your history or post as you, and "two-way sync with my account" is the whole feature.
@@ -28,11 +28,11 @@ npm run check           # 59 schema + 8 seed + 87 bridge assertions, both typech
 make bridge             # the sync worker (BRIDGE_TRANSPORT=memory: no Telegram needed)
 ```
 
-Then fill `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.massanger/app.json` with the values
+Then fill `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.messengerx/app.json` with the values
 `supabase start` prints, and run the app:
 
 ```bash
-make app                # flutter run --dart-define-from-file=../../.massanger/app.json
+make app                # flutter run --dart-define-from-file=../../.messengerx/app.json
 ```
 
 `make help` lists every task. [docs/runbook.md](docs/runbook.md) covers what cannot be
@@ -50,7 +50,7 @@ Telegram API credential, and deploying the worker.
   notes (recorded with a live level meter, a 64-bar waveform stored with the message,
   one shared audio player, tap-the-waveform to seek).
 - Reply, delete-for-everyone, retry-after-failure, read receipts that travel in both
-  directions (reading in Telegram clears the Massanger badge; reading in Massanger sends
+  directions (reading in Telegram clears the MessengerX badge; reading in MessengerX sends
   `viewMessages`).
 - Sign-in with Google, gated on the account being older than 366 days — checked server
   side against Gmail, with Drive as fallback, and rendered by the app as a state it

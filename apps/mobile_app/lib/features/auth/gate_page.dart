@@ -37,7 +37,7 @@ class GatePage extends StatelessWidget {
                       ),
                       const SizedBox(height: 20),
                       Text(
-                        blocked ? 'Massanger is not available for this account' : 'Checking your Google account',
+                        blocked ? 'MessengerX is not available for this account' : 'Checking your Google account',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
                       ),
@@ -45,7 +45,7 @@ class GatePage extends StatelessWidget {
                       Text(
                         eligibility?.reason.isNotEmpty == true
                             ? eligibility!.reason
-                            : 'Massanger requires a Google account at least 366 days old. '
+                            : 'MessengerX requires a Google account at least 366 days old. '
                                 'This is verified with Google, on the server.',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),

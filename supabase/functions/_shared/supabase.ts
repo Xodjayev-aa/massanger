@@ -13,8 +13,8 @@ export type AdminClient = SupabaseClient;
  */
 export function adminClient(env: Env): AdminClient {
   return createClient(env.supabaseUrl, env.serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false, storageKey: `massanger-admin-${Date.now()}` },
-    global: { headers: { 'x-application-name': 'massanger-edge' } },
+    auth: { persistSession: false, autoRefreshToken: false, storageKey: `messengerx-admin-${Date.now()}` },
+    global: { headers: { 'x-application-name': 'messengerx-edge' } },
   });
 }
 
@@ -22,7 +22,7 @@ export function adminClient(env: Env): AdminClient {
 export function userClient(env: Env, jwt: string): AdminClient {
   return createClient(env.supabaseUrl, env.anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${jwt}`, 'x-application-name': 'massanger-edge' } },
+    global: { headers: { Authorization: `Bearer ${jwt}`, 'x-application-name': 'messengerx-edge' } },
   });
 }
 

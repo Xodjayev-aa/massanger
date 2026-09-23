@@ -81,7 +81,7 @@ export async function completeLinkHandshake(ctx: LinkContext): Promise<LinkOutco
             status: 'failed',
             step: 'failed',
             error:
-              'that phone number is not registered on Telegram; Massanger links an existing account',
+              'that phone number is not registered on Telegram; MessengerX links an existing account',
             authState: 'failed',
           });
         }

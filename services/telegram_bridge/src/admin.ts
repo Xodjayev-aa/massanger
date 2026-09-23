@@ -170,8 +170,8 @@ async function wake(request: IncomingMessage, response: ServerResponse, ctx: Rou
  */
 function authorize(request: IncomingMessage, body: string, config: BridgeConfig): boolean {
   if (!config.bridgeToken && !config.bridgeHmacSecret) {
-    // Explicitly insecure, and only reachable when MASSANGER_ENV=development.
-    return config.massangerEnv !== 'production';
+    // Explicitly insecure, and only reachable when MESSENGERX_ENV=development.
+    return config.messengerxEnv !== 'production';
   }
 
   const bearer = (singleHeader(request.headers.authorization) ?? '').replace(/^Bearer\s+/i, '');
@@ -255,32 +255,32 @@ const asObject = (value: unknown): Record<string, unknown> =>
 export function renderPrometheus(manager: BridgeManager): string {
   const metrics = manager.metrics();
   const lines: string[] = [
-    '# TYPE massanger_bridge_up gauge',
-    'massanger_bridge_up 1',
-    '# TYPE massanger_bridge_uptime_seconds counter',
-    `massanger_bridge_uptime_seconds ${metrics.uptime_seconds}`,
-    '# TYPE massanger_bridge_sessions gauge',
-    `massanger_bridge_sessions ${metrics.sessions}`,
-    '# TYPE massanger_bridge_ready_sessions gauge',
-    `massanger_bridge_ready_sessions ${metrics.ready_sessions}`,
-    '# TYPE massanger_bridge_max_sessions gauge',
-    `massanger_bridge_max_sessions ${metrics.max_sessions}`,
-    '# TYPE massanger_bridge_rows_last_tick gauge',
-    `massanger_bridge_rows_last_tick ${metrics.rows_last_tick}`,
-    '# TYPE massanger_bridge_link_requests_last_tick gauge',
-    `massanger_bridge_link_requests_last_tick ${metrics.link_requests_last_tick}`,
+    '# TYPE messengerx_bridge_up gauge',
+    'messengerx_bridge_up 1',
+    '# TYPE messengerx_bridge_uptime_seconds counter',
+    `messengerx_bridge_uptime_seconds ${metrics.uptime_seconds}`,
+    '# TYPE messengerx_bridge_sessions gauge',
+    `messengerx_bridge_sessions ${metrics.sessions}`,
+    '# TYPE messengerx_bridge_ready_sessions gauge',
+    `messengerx_bridge_ready_sessions ${metrics.ready_sessions}`,
+    '# TYPE messengerx_bridge_max_sessions gauge',
+    `messengerx_bridge_max_sessions ${metrics.max_sessions}`,
+    '# TYPE messengerx_bridge_rows_last_tick gauge',
+    `messengerx_bridge_rows_last_tick ${metrics.rows_last_tick}`,
+    '# TYPE messengerx_bridge_link_requests_last_tick gauge',
+    `messengerx_bridge_link_requests_last_tick ${metrics.link_requests_last_tick}`,
   ];
   for (const [key, value] of Object.entries(metrics.totals)) {
-    lines.push(`# TYPE massanger_bridge_${key}_total counter`, `massanger_bridge_${key}_total ${value}`);
+    lines.push(`# TYPE messengerx_bridge_${key}_total counter`, `messengerx_bridge_${key}_total ${value}`);
   }
   for (const session of manager.sessionMetrics() as Record<string, unknown>[]) {
     const owner = String(session.username ?? session.owner ?? 'unknown');
     lines.push(
-      '# TYPE massanger_bridge_session_state gauge',
-      `massanger_bridge_session_state{owner="${sanitize(owner)}",state="${sanitize(String(session.state ?? ''))}"} 1`,
-      `massanger_bridge_pending_inbox{owner="${sanitize(owner)}"} ${Number(session.pending_inbox ?? 0)}`,
-      `massanger_bridge_sent_total{owner="${sanitize(owner)}"} ${Number(session.sent ?? 0)}`,
-      `massanger_bridge_ingested_total{owner="${sanitize(owner)}"} ${Number(session.ingested ?? 0)}`,
+      '# TYPE messengerx_bridge_session_state gauge',
+      `messengerx_bridge_session_state{owner="${sanitize(owner)}",state="${sanitize(String(session.state ?? ''))}"} 1`,
+      `messengerx_bridge_pending_inbox{owner="${sanitize(owner)}"} ${Number(session.pending_inbox ?? 0)}`,
+      `messengerx_bridge_sent_total{owner="${sanitize(owner)}"} ${Number(session.sent ?? 0)}`,
+      `messengerx_bridge_ingested_total{owner="${sanitize(owner)}"} ${Number(session.ingested ?? 0)}`,
     );
   }
   return `${lines.join('\n')}\n`;

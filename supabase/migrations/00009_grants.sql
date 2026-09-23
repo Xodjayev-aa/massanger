@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00009_grants_and_introspection.sql
--- Massanger — least-privilege grants + PostgREST/OpenAPI descriptions.
+-- MessengerX — least-privilege grants + PostgREST/OpenAPI descriptions.
 --
 -- Supabase's hosted projects ship default privileges for `public`; they are
 -- restated here explicitly so a self-hosted project (or a bare Postgres used

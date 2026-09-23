@@ -1,13 +1,13 @@
 {
-  "name": "@massanger/telegram-bridge",
+  "name": "@messengerx/telegram-bridge",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Two-way Telegram ⇄ Massanger sync worker built on TDLib (personal accounts, not the Bot API).",
+  "description": "Two-way Telegram ⇄ MessengerX sync worker built on TDLib (personal accounts, not the Bot API).",
   "license": "MIT",
   "engines": { "node": ">=20.11" },
   "main": "dist/main.js",
-  "bin": { "massanger-bridge": "dist/main.js" },
+  "bin": { "messengerx-bridge": "dist/main.js" },
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",

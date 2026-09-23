@@ -39,11 +39,11 @@ ENV NODE_ENV=production \
     TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so \
     BRIDGE_HEALTH_HOST=0.0.0.0 \
     BRIDGE_HEALTH_PORT=8787 \
-    BRIDGE_DATA_DIR=/var/lib/massanger-bridge
+    BRIDGE_DATA_DIR=/var/lib/messengerx-bridge
 
-RUN mkdir -p /var/lib/massanger-bridge && chown -R node:node /var/lib/massanger-bridge /app
+RUN mkdir -p /var/lib/messengerx-bridge && chown -R node:node /var/lib/messengerx-bridge /app
 USER node
-VOLUME ["/var/lib/massanger-bridge"]
+VOLUME ["/var/lib/messengerx-bridge"]
 EXPOSE 8787
 
 HEALTHCHECK --interval=30s --timeout=4s --start-period=15s --retries=3 \

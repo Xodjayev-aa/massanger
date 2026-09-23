@@ -324,9 +324,9 @@ export class TelegramSimulator implements TdLibTransport {
           reply({
             '@type': 'user',
             id: this.#myId,
-            first_name: 'Massanger',
+            first_name: 'MessengerX',
             last_name: 'Simulator',
-            username: 'massanger_sim',
+            username: 'messengerx_sim',
             phone_number: this.#authorization.phone ?? '+10000000000',
             type: { '@type': 'userTypeRegular' },
             status: { '@type': 'userStatusRecently' },
@@ -493,7 +493,7 @@ export class TelegramSimulator implements TdLibTransport {
             expected_size: 1024,
             local: {
               '@type': 'localFile',
-              path: `${process.env.TMPDIR ?? '/tmp'}/massanger-sim-${fileId}.bin`,
+              path: `${process.env.TMPDIR ?? '/tmp'}/messengerx-sim-${fileId}.bin`,
               is_downloaded_now: false,
               is_downloading_active: false,
               downloaded_size: 0,
@@ -516,7 +516,7 @@ export class TelegramSimulator implements TdLibTransport {
                 expected_size: 1024,
                 local: {
                   '@type': 'localFile',
-                  path: `${process.env.TMPDIR ?? '/tmp'}/massanger-sim-${Number(request.file_id)}.bin`,
+                  path: `${process.env.TMPDIR ?? '/tmp'}/messengerx-sim-${Number(request.file_id)}.bin`,
                   is_downloaded_now: true,
                   downloaded_size: 1024,
                 },
@@ -549,7 +549,7 @@ export class TelegramSimulator implements TdLibTransport {
     this.#authorization = { ...this.#authorization, state: 'ready' };
     this.#emit({ '@type': 'updateAuthorizationState', authorization_state: { '@type': 'authorizationStateReady' } });
     this.#emit({ '@type': 'updateOption', name: 'my_id', value: { '@type': 'tdlibParametersOptionId', value: this.#myId } });
-    this.#emit({ '@type': 'updateMe', user: { '@type': 'user', id: this.#myId, first_name: 'Massanger' } });
+    this.#emit({ '@type': 'updateMe', user: { '@type': 'user', id: this.#myId, first_name: 'MessengerX' } });
   }
 
   #option(name: string): TdObject {

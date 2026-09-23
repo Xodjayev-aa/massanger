@@ -26,7 +26,7 @@ void registerDependencies({required AppEnv env, required SupabaseClient client})
     ..registerLazySingleton<VoicePlayer>(VoicePlayer.new);
 }
 
-/// Called from `AppLifecycleListener`-style hooks in [MassangerApp]; keeping the
+/// Called from `AppLifecycleListener`-style hooks in [MessengerXApp]; keeping the
 /// teardown in one place stops a dispose from being forgotten when a provider moves
 /// up the tree.
 Future<void> disposeDependencies() async {

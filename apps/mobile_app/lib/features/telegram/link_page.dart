@@ -102,7 +102,7 @@ class _LinkView extends StatelessWidget {
                   ],
                   const SizedBox(height: 20),
                   Text(
-                    'Massanger links an existing Telegram account. It does not register a new one, and it never '
+                    'MessengerX links an existing Telegram account. It does not register a new one, and it never '
                     'stores your code or password: both are encrypted for the bridge and dropped as soon as '
                     'Telegram accepts them.',
                     style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
@@ -341,7 +341,7 @@ class _RegistrationNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InlineError(
-      message: 'That number does not have a Telegram account yet. Massanger links an existing one — '
+      message: 'That number does not have a Telegram account yet. MessengerX links an existing one — '
           'install Telegram, register the number, then come back.',
     );
   }

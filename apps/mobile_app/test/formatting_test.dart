@@ -4,7 +4,7 @@
 // imports Flutter.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:massanger_app/core/formatting.dart';
+import 'package:messengerx_app/core/formatting.dart';
 
 void main() {
   group('dayLabel', () {

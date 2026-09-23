@@ -55,7 +55,7 @@ const schema = z.object({
   transport: z.enum(['koffi', 'websocket', 'memory']).catch('koffi').default('koffi'),
   tdlibLibraryPath: z.string().default('libtdjson.so'),
   websocketUrl: z.string().url().optional(),
-  dataDir: z.string().default(os.tmpdir() + '/massanger-bridge'),
+  dataDir: z.string().default(os.tmpdir() + '/messengerx-bridge'),
   // Required for a real Telegram connection; `loadConfig` substitutes harmless
   // dummies in memory (simulator) mode so `npm run bridge` works before an
   // api_id exists — a production boot still cannot forget them.
@@ -66,7 +66,7 @@ const schema = z.object({
   useTestDc: booleanish.default(false),
   useSecretChats: booleanish.default(false),
   applicationVersion: z.string().default('1.0.0'),
-  deviceModel: z.string().default('Massanger Bridge'),
+  deviceModel: z.string().default('MessengerX Bridge'),
   systemLanguageCode: z.string().default('en'),
   /**
    * Optional base64 of 32 random bytes. When set, TDLib encrypts its session
@@ -127,7 +127,7 @@ const schema = z.object({
             .filter((entry) => entry.length > 0)
         : undefined,
     ),
-  massangerEnv: z.enum(['development', 'staging', 'production']).catch('development').default('development'),
+  messengerxEnv: z.enum(['development', 'staging', 'production']).catch('development').default('development'),
   logLevel: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).catch('info').default('info'),
   gracefulShutdownMs: positiveInt(15_000),
 });
@@ -185,7 +185,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfi
         : apiHashCandidate,
     useTestDc: source.TELEGRAM_TEST_DC,
     useSecretChats: source.TELEGRAM_SECRET_CHATS,
-    applicationVersion: source.MASSANGER_VERSION,
+    applicationVersion: source.MESSENGERX_VERSION,
     deviceModel: source.TELEGRAM_DEVICE_MODEL,
     systemLanguageCode: source.TELEGRAM_LANGUAGE_CODE,
     databaseEncryptionKey: source.TDLIB_DB_KEY,
@@ -209,7 +209,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfi
     healthHost: source.BRIDGE_HEALTH_HOST,
     logLevel: source.LOG_LEVEL,
     allowedOrigins: source.ALLOWED_ORIGINS,
-    massangerEnv: source.MASSANGER_ENV,
+    messengerxEnv: source.MESSENGERX_ENV,
     gracefulShutdownMs: source.BRIDGE_GRACEFUL_SHUTDOWN_MS,
   });
 

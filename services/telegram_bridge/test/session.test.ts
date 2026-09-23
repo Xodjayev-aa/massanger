@@ -43,7 +43,7 @@ const newHarness = (
     context: accountContext(contextOverrides),
     transportFor: () => sim,
   });
-  const storageDir = path.join(os.tmpdir(), 'massanger-sim-files');
+  const storageDir = path.join(os.tmpdir(), 'messengerx-sim-files');
   mkdirSync(storageDir, { recursive: true });
   return { config, sim, rec, session, storageDir };
 };
@@ -91,7 +91,7 @@ describe('telegram session', () => {
     assert.ok(complete, 'the identity is written once');
     const body = complete.json();
     assert.equal(body.p_tg_user_id, '777001');
-    assert.equal(body.p_tg_username, 'massanger_sim');
+    assert.equal(body.p_tg_username, 'messengerx_sim');
     assert.equal(body.p_api_id, config.apiId);
     assert.equal(body.p_login_token_enc, null, 'no login token is minted unless the operator asks');
   });
@@ -181,14 +181,14 @@ describe('telegram session', () => {
     await session.start();
     await linkInto(rec, config, session);
 
-    // The bridge only uploads media once the Telegram chat is bound to a Massanger
+    // The bridge only uploads media once the Telegram chat is bound to a MessengerX
     // chat, because that chat id is the storage folder membership is checked on.
     rec.reply('/rpc/bridge_resolve_chat', { chat_id: CHAT_ID, created: true });
 
     // The simulator promises this exact local path for the next file it hands out.
     const bytes = Buffer.from(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Uint8Array(60)]));
     const nextFileId = 3_001;
-    const target = path.join(process.env.TMPDIR ?? '/tmp', `massanger-sim-${nextFileId}.bin`);
+    const target = path.join(process.env.TMPDIR ?? '/tmp', `messengerx-sim-${nextFileId}.bin`);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, bytes);
     void storageDir;

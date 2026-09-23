@@ -1,5 +1,5 @@
-name: massanger_app
-description: Massanger — Flutter client for the Supabase messenger with a two-way TDLib Telegram bridge.
+name: messengerx_app
+description: MessengerX — Flutter client for the Supabase messenger with a two-way TDLib Telegram bridge.
 publish_to: none
 version: 1.0.0+1
 

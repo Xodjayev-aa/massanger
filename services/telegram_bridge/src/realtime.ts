@@ -106,7 +106,7 @@ export async function startRealtimeWake(
       // is allowed to see, and the payload is never trusted for authorisation.
       client.realtime.setAuth(config.serviceRoleKey);
 
-      const created = client.channel(`massanger-bridge-${config.workerId}`, {
+      const created = client.channel(`messengerx-bridge-${config.workerId}`, {
         config: { broadcast: { self: false }, private: false },
       });
       channel = created;

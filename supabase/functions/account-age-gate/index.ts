@@ -173,7 +173,7 @@ async function handle(request: Request): Promise<Response> {
     if (!accessToken) {
       throw new HttpError(
         'eligibility_pending',
-        'No Google access token available. Sign in with Google (consent prompt) and retry — Massanger needs Gmail/Drive metadata to date the account.',
+        'No Google access token available. Sign in with Google (consent prompt) and retry — MessengerX needs Gmail/Drive metadata to date the account.',
       );
     }
 

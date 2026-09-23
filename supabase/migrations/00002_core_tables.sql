@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00002_core_tables.sql
--- Massanger — profiles / chats / chat_participants / messages (+ receipts).
+-- MessengerX — profiles / chats / chat_participants / messages (+ receipts).
 --
 -- This is the whole messaging core. It is deliberately transport-agnostic:
 -- rows may originate from the Flutter app (`source = 'app'`) or be mirrored

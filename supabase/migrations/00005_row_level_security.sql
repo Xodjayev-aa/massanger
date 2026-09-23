@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00005_row_level_security.sql
--- Massanger — RLS + column-level guards.
+-- MessengerX — RLS + column-level guards.
 --
 -- Two ideas carry this file:
 --

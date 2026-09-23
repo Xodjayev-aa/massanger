@@ -1,4 +1,4 @@
-# Massanger — one place for the commands that actually work.
+# MessengerX — one place for the commands that actually work.
 #
 # Nothing here is magic: every target prints the command it runs (`$(Q)` is empty by
 # default, `make Q=@` hides them), so you can copy it out and run it yourself.
@@ -56,7 +56,7 @@ env:
 		'# supabase/functions/.env.local: one client, two consumers.' \
 		'GOOGLE_OAUTH_CLIENT_ID=' \
 		'GOOGLE_OAUTH_CLIENT_SECRET=' > $(ENV_LOCAL)
-	$(Q)test -f $(ROOT)/.massanger/app.json || mkdir -p $(ROOT)/.massanger && cp $(ROOT)/apps/mobile_app/env/app.example.json $(ROOT)/.massanger/app.json
+	$(Q)test -f $(ROOT)/.messengerx/app.json || mkdir -p $(ROOT)/.messengerx && cp $(ROOT)/apps/mobile_app/env/app.example.json $(ROOT)/.messengerx/app.json
 	$(Q)echo 'local secret files are in place — fill them in (supabase/.env, $(notdir $(FUNC_ENV)), $(notdir $(BRIDGE_ENV)))'
 
 # ── local database ───────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ sql-test:
 # ── app ──────────────────────────────────────────────────────────────────────
 .PHONY: app
 app:
-	$(Q)cd $(APP_DIR) && $(FLUTTER) run --dart-define-from-file=../../.massanger/app.json
+	$(Q)cd $(APP_DIR) && $(FLUTTER) run --dart-define-from-file=../../.messengerx/app.json
 
 .PHONY: build-ios
 build-ios:

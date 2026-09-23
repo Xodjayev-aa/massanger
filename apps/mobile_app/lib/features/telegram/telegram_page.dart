@@ -64,14 +64,14 @@ class _TelegramView extends StatelessWidget {
                   if (account.isLinked || account.mirroredChats > 0) ...<Widget>[
                     const _SectionTitle('What the bridge may do'),
                     _PreferenceRow(
-                      title: 'Mirror Telegram chats into Massanger',
+                      title: 'Mirror Telegram chats into MessengerX',
                       subtitle: 'Turn this off to stop importing new Telegram messages. Existing chats stay.',
                       value: account.mirrorToApp,
                       onChanged: (value) => context.read<TelegramCubit>().setPreferences(mirrorToApp: value),
                     ),
                     _PreferenceRow(
                       title: 'Download voice notes',
-                      subtitle: 'Voice notes are fetched and re-hosted, so they play in Massanger and in Telegram.',
+                      subtitle: 'Voice notes are fetched and re-hosted, so they play in MessengerX and in Telegram.',
                       value: account.autoDownloadVoice,
                       onChanged: (value) => context.read<TelegramCubit>().setPreferences(autoDownloadVoice: value),
                     ),
@@ -99,7 +99,7 @@ class _TelegramView extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.all(16),
                       child: Text(
-                        'Link your Telegram account and Massanger will mirror the chats you choose, in both directions.',
+                        'Link your Telegram account and MessengerX will mirror the chats you choose, in both directions.',
                         style: theme.textTheme.bodyMedium,
                       ),
                     ),
@@ -170,8 +170,8 @@ class _ConnectionCard extends StatelessWidget {
                         builder: (dialogContext) => AlertDialog(
                           title: const Text('Unlink Telegram?'),
                           content: const Text(
-                            'Massanger stops mirroring immediately and the bridge closes the TDLib session. '
-                            'Your imported chats and messages stay in Massanger.',
+                            'MessengerX stops mirroring immediately and the bridge closes the TDLib session. '
+                            'Your imported chats and messages stay in MessengerX.',
                           ),
                           actions: <Widget>[
                             TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),

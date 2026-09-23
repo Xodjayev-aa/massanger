@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 00008_realtime_and_storage.sql
--- Massanger — Realtime replication + Storage buckets & policies.
+-- MessengerX — Realtime replication + Storage buckets & policies.
 --
 -- Realtime is the *only* transport the Flutter UI needs for "instant": every
 -- device subscribed to a chat receives INSERT/UPDATE events for `messages`

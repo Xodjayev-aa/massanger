@@ -40,7 +40,7 @@ class AppException implements Exception {
       final statusCode = error.statusCode;
       return AppException(
         'storage',
-        statusCode == '413' ? 'That file is too large for Massanger.' : error.message,
+        statusCode == '413' ? 'That file is too large for MessengerX.' : error.message,
         cause: error,
       );
     }
@@ -56,7 +56,7 @@ class AppException implements Exception {
       return const AppException('timeout', 'The server took too long to answer. Try again.');
     }
     if (error is SocketException || error is HttpException) {
-      return const AppException('network', 'No connection to Massanger. Check the network and retry.');
+      return const AppException('network', 'No connection to MessengerX. Check the network and retry.');
     }
     return AppException('unknown', '$error', cause: error);
   }
@@ -92,7 +92,7 @@ class AppException implements Exception {
       case '42501':
         return 'Please sign in again — your session expired.';
       case '22023':
-        return 'That attachment is not in a shape Massanger accepts.';
+        return 'That attachment is not in a shape MessengerX accepts.';
       case '23505':
         return 'That already exists.';
       case '40001':

@@ -1,4 +1,4 @@
-# Massanger — local Supabase configuration.
+# MessengerX — local Supabase configuration.
 #
 # `supabase start` reads this file; `supabase functions serve` reuses [api]/[db],
 # so the edge functions run against the same keys as the app. Everything here is
@@ -6,14 +6,14 @@
 # secrets, never in this file. Unknown keys are reported by the CLI on start — if
 # your CLI version renames a table, fix it here rather than forking the stack.
 
-project_id = "massanger"
+project_id = "messengerx"
 
 [api]
 enabled = true
 port = 54321
 # Anon key/JWT secret are generated per project: `supabase start` prints them, and
 # you paste them into supabase/functions/.env.local, services/telegram_bridge/.env
-# and .massanger/app.json (the app's --dart-define file). `make env` creates all three
+# and .messengerx/app.json (the app's --dart-define file). `make env` creates all three
 # from the committed examples; nothing here is a secret worth committing.
 extra_keep_alive = 75
 max_rows = 1000
@@ -51,8 +51,8 @@ file_size_limit = "20MiB"
 enabled = true
 site_url = "http://127.0.0.1:54321/auth/v1/callback"
 additional_redirect_urls = [
-  "io.massanger.app://login-callback",
-  "com.massanger.app://login-callback",
+  "io.messengerx.app://login-callback",
+  "com.messengerx.app://login-callback",
 ]
 jwt_expiry = 3600
 jwt_secret = "super-secret-jwt-token-with-at-least-32-characters-long"

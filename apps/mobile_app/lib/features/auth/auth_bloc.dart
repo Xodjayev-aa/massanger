@@ -165,7 +165,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthUiState> {
   Future<void> _onProfileRefresh(AuthProfileRefreshRequested event, Emitter<AuthUiState> emit) => _bootstrap(emit);
 
   /// Profile → gate decision. The profile row is authoritative for whether this
-  /// account may use Massanger; the eligibility result only explains the state.
+  /// account may use MessengerX; the eligibility result only explains the state.
   Future<void> _bootstrap(Emitter<AuthUiState> emit) async {
     final userId = _accounts.currentUserId;
     if (userId == null) {

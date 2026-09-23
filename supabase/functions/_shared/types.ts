@@ -1,5 +1,5 @@
 /**
- * Shared vocabulary for every Massanger edge function.
+ * Shared vocabulary for every MessengerX edge function.
  *
  * Responses are always envelopes, never bare payloads: a client can branch on
  * `ok` without sniffing status codes, and errors carry a stable `code` the Dart

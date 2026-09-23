@@ -1,5 +1,5 @@
 /**
- * The mapping layer is where a Telegram message becomes a Massanger message and
+ * The mapping layer is where a Telegram message becomes a MessengerX message and
  * back, so its edge cases (long text, markdown, missing media, unsupported types)
  * are asserted here rather than discovered in production.
  */
@@ -108,8 +108,14 @@ describe('markdown', () => {
   });
 
   it('turns text links into markdown', () => {
-    const rendered = renderMarkdown('massanger', [{ '@type': 'messageEntityTextUrl', offset: 0, length: 9, url: 'https://m.dev' }]);
-    assert.equal(rendered, '[massanger](https://m.dev)');
+    // The entity length is derived, never hard-coded: this fixture used to spell the
+    // label with the old project name and a 9, which silently stopped matching the
+    // moment the word changed.
+    const text = 'messengerx.app';
+    const rendered = renderMarkdown(text, [
+      { '@type': 'messageEntityTextUrl', offset: 0, length: text.length, url: 'https://m.dev' },
+    ]);
+    assert.equal(rendered, `[${text}](https://m.dev)`);
   });
 
   it('ignores out-of-range and unknown entities', () => {

@@ -426,7 +426,7 @@ export function mapIncomingMessage(input: InboundMessageInput): MappedMessage {
       const uploaded = Number.isFinite(fileId) ? input.uploaded?.get(fileId) : undefined;
 
       // Telegram delivers some voice notes (and Telegram Desktop's "audio") as
-      // documents; anything Opus-looking becomes a voice note in Massanger.
+      // documents; anything Opus-looking becomes a voice note in MessengerX.
       if (uploaded && isVoiceMime(mime)) {
         return {
           kind: 'voice',
