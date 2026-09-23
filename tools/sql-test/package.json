@@ -1,0 +1,9 @@
+{
+  "name": "@massanger/sql-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Applies every migration to a throwaway Postgres (PGlite) and asserts messaging/RLS/bridge behaviour.",
+  "scripts": { "test": "node run.mjs" },
+  "dependencies": { "@electric-sql/pglite": "^0.5.8" }
+}

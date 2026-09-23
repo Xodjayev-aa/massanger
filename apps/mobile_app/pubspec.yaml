@@ -1,0 +1,53 @@
+name: massanger_app
+description: Massanger — Flutter client for the Supabase messenger with a two-way TDLib Telegram bridge.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  # The lower bound is the version this repo is developed and reviewed against;
+  # `flutter pub upgrade` is expected to stay within these carets (see README).
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State management
+  flutter_bloc: ^8.1.6
+  equatable: ^2.0.5
+
+  # Backend
+  supabase_flutter: ^2.8.0
+
+  # Routing / wiring
+  go_router: ^14.2.7
+  get_it: ^7.7.0
+
+  # Media: voice notes, photos
+  record: ^5.1.2
+  just_audio: ^0.9.40
+  image_picker: ^1.1.2
+  permission_handler: ^11.3.1
+  path_provider: ^2.1.4
+  cached_network_image: ^3.4.1
+  qr_flutter: ^4.1.0
+  photo_view: ^0.15.0
+
+  # Support
+  intl: ^0.19.0
+  uuid: ^4.5.1
+  collection: ^1.18.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/

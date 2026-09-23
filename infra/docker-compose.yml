@@ -1,0 +1,59 @@
+# Local/staging wiring for the sync worker. The database itself comes from the
+# Supabase CLI (`supabase start`, or a hosted project) — this file deliberately does
+# not re-implement it: a hand-rolled Postgres would drift from supabase/config.toml
+# and produce a storage bucket layout that the migrations never created.
+#
+#   make docker-up        # bridge (+ the TDLib sidecar when BRIDGE_TRANSPORT=td_ws)
+#
+# Secrets are read from services/telegram_bridge/.env, which `make env` creates.
+
+name: massanger
+
+services:
+  bridge:
+    build:
+      context: ../services/telegram_bridge
+      dockerfile: Dockerfile
+    image: massanger/telegram-bridge:local
+    restart: unless-stopped
+    env_file:
+      - ../services/telegram_bridge/.env
+    environment:
+      # Compose networking, not the host's: these two override whatever a developer
+      # has in their .env for a hosted deployment.
+      BRIDGE_HEALTH_HOST: 0.0.0.0
+      BRIDGE_BASE_URL: http://bridge:8787
+      MASSANGER_ENV: ${MASSANGER_ENV:-staging}
+      # With a sidecar, TDLib lives in its own container; with `koffi` the bridge
+      # loads /usr/local/lib/libtdjson.so from its own image.
+      BRIDGE_TRANSPORT: ${BRIDGE_TRANSPORT:-memory}
+    ports:
+      - "8787:8787"          # /healthz, /readyz, /metrics, /internal/wake
+    volumes:
+      - bridge-sessions:/var/lib/massanger-bridge
+    depends_on:
+      - tdlib
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 4s
+      retries: 3
+      start_period: 20s
+    # TDLib keeps its own encrypted SQLite per account; losing this volume means
+    # every linked user has to authenticate again from the app.
+    stop_grace_period: 45s
+
+  # Only needed when BRIDGE_TRANSPORT=td_ws. The image must contain the same TDLib
+  # version the bridge was built against (see the Dockerfile's TDLIB_VERSION).
+  tdlib:
+    image: ghcr.io/apocdev/tdlib-serve:v1.8.43
+    restart: unless-stopped
+    command: ["-d", "/var/lib/td", "-p", "8081"]
+    volumes:
+      - tdlib-data:/var/lib/td
+    expose:
+      - "8081"
+
+volumes:
+  bridge-sessions:
+  tdlib-data:

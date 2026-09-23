@@ -1,0 +1,27 @@
+{
+  "name": "massanger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Massanger — Flutter + Supabase messenger with a two-way TDLib Telegram bridge (monorepo root).",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "workspaces": [
+    "services/*",
+    "tools/*"
+  ],
+  "scripts": {
+    "setup": "npm install --no-audit --no-fund",
+    "typecheck": "npm run typecheck:functions && npm run typecheck:bridge",
+    "typecheck:functions": "tsc -p tools/typecheck/tsconfig.functions.json",
+    "typecheck:bridge": "npm run --workspace @massanger/telegram-bridge typecheck",
+    "test": "npm run test:sql && npm run test:seed && npm run test:bridge",
+    "test:sql": "node tools/sql-test/run.mjs",
+    "test:bridge": "npm run --workspace @massanger/telegram-bridge test",
+    "build:bridge": "npm run --workspace @massanger/telegram-bridge build",
+    "bridge": "npm run --workspace @massanger/telegram-bridge dev",
+    "fmt": "deno fmt supabase/functions && npm run --workspace @massanger/telegram-bridge fmt",
+    "check": "npm run typecheck && npm test",
+    "test:seed": "node tools/sql-test/seed-check.mjs"
+  }
+}

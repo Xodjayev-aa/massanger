@@ -1,0 +1,3 @@
+Place `logo.svg` / `splash.png` here. Kept as a tracked directory so a fresh clone
+builds: pubspec.yaml lists `assets/branding/`, and Flutter fails the build if a
+declared asset directory does not exist.

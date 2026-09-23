@@ -1,0 +1,70 @@
+# ─── OS / editors ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# ─── Secrets (never commit) ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+service-account*.json
+google-services.json
+Info.plist.local
+
+# ─── Flutter / Dart ──────────────────────────────────────────────────────────
+apps/mobile_app/.dart_tool/
+apps/mobile_app/.flutter-plugins
+apps/mobile_app/.flutter-plugins-dependencies
+apps/mobile_app/build/
+apps/mobile_app/.pub-cache/
+apps/mobile_app/.pub/
+apps/mobile_app/pubspec.lock
+apps/mobile_app/ios/Pods/
+apps/mobile_app/ios/.symlinks/
+apps/mobile_app/ios/Flutter/Flutter.podspec
+apps/mobile_app/android/.gradle/
+apps/mobile_app/android/app/debug/
+apps/mobile_app/android/app/profile/
+apps/mobile_app/android/app/release/
+apps/mobile_app/**/GeneratedPluginRegistrant.*
+apps/mobile_app/web/manifest.json.local
+apps/mobile_app/l10n/*.arb.g.dart
+
+# ─── Node / TypeScript ───────────────────────────────────────────────────────
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+coverage/
+.nyc_output/
+
+# ─── Supabase local dev ──────────────────────────────────────────────────────
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+supabase/functions/.vscode/
+
+# ─── TDLib bridge runtime data ───────────────────────────────────────────────
+services/telegram_bridge/.data/
+services/telegram_bridge/dist-test/
+services/telegram_bridge/tdlib-tmp/
+services/telegram_bridge/*.log
+infra/**/build/
+
+# ─── Artifacts ────────────────────────────────────────────────────────────────
+*.apk
+*.aab
+*.ipa
+*.app
+build/
+tools/sql-test/.pgdata/
+
+# Local dart-define file created by `make env` (never commit a real anon key).
+.massanger/

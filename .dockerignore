@@ -1,0 +1,10 @@
+**/node_modules
+**/dist-test
+**/.dart_tool
+**/build
+.git
+supabase/.branches
+supabase/.temp
+**/*.log
+services/telegram_bridge/.data
+services/telegram_bridge/tdlib-tmp

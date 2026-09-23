@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # No Docker here on purpose: the SQL suite runs on PGlite and the bridge suite
+  # runs against the in-process memory transport, so the two things most likely to
+  # break (schema behaviour, sync worker logic) are checked in ~40 s on a runner
+  # with no services to wait for.
+  server:
+    name: schema + functions + bridge
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: migrations behave (59 assertions)
+        run: npm run test:sql
+      - name: seed.sql applies and its fixtures are consistent
+        run: npm run test:seed
+      - name: bridge logic (87 assertions)
+        run: npm run test:bridge
+      - name: edge functions typecheck against Deno's lib surface
+        run: npm run typecheck:functions
+      - name: bridge typecheck
+        run: npm run typecheck:bridge
+
+  app:
+    name: flutter
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.5   # matches the pubspec constraint; bump together with it
+      - name: pub get
+        working-directory: apps/mobile_app
+        run: flutter pub get
+      # `--no-fatal-infos` because the lint set mixes errors with stylistic hints
+      # (sort_child_properties_last and friends); the Makefile keeps `fmt` as the
+      # place where the house style is enforced.
+      - name: analyze
+        working-directory: apps/mobile_app
+        run: flutter analyze --no-fatal-infos
+      - name: unit + widget tests
+        working-directory: apps/mobile_app
+        run: flutter test
+
+  # Builds (never pushes) the worker image so a Dockerfile or TDLib pin that stopped
+  # compiling is caught before someone deploys it.
+  image:
+    name: bridge image builds
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: services/telegram_bridge
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
