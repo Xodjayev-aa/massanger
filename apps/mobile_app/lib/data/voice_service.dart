@@ -144,7 +144,7 @@ class VoiceService {
       return null;
     }
 
-    final wavPath = path.substring(0, path.length - 4) + '.wav';
+    final wavPath = '${path.substring(0, path.length - 4)}.wav';
     final bytes = await _readAndClose(path);
     await File(wavPath).writeAsBytes(_withWavHeader(bytes), flush: true);
     await _deleteQuietly(path);

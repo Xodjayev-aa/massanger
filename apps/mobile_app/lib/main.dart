@@ -29,6 +29,11 @@ Future<void> main() async {
     env.validate();
     await Supabase.initialize(
       url: env.supabaseUrl,
+      // `anonKey` is deprecated in favour of `publishableKey`, which wants the new
+      // `sb_publishable_…` format. A project still on legacy JWT keys passes its anon
+      // key here, so the *name* is ignored rather than swapping in a value this
+      // project may never have issued.
+      // ignore: deprecated_member_use
       anonKey: env.supabaseAnonKey,
       // Local development against `supabase start` is http; production must be
       // https, which the platform enforces anyway.

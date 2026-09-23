@@ -125,6 +125,7 @@ final class ImageMedia extends MessageMedia {
 
   double get aspectRatio => width <= 0 || height <= 0 ? 1.0 : width / height;
 
+  @override
   Map<String, Object?> toMap() => {
         'kind': 'image',
         'bucket': bucket,
@@ -175,6 +176,7 @@ final class VoiceMedia extends MessageMedia {
         transcript: map['text_transcript'] as String?,
       );
 
+  @override
   Map<String, Object?> toMap() => {
         'kind': 'voice',
         'bucket': bucket,

@@ -89,7 +89,7 @@ class ChatRepository {
     } catch (error) {
       // A failed read receipt is cosmetic: never surface it, but do not swallow
       // an auth failure, which would hide a real problem from the user.
-      if (error is AppException && error.code == '42501') throw error;
+      if (error is AppException && error.code == '42501') rethrow;
     }
   }
 

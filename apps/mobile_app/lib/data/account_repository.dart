@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/errors.dart';
@@ -33,6 +34,12 @@ class AccountRepository {
   /// Google is the only identity provider, because the age rule is defined on a
   /// Google account. `signInWithOAuth` returns once the redirect completes; the
   /// provider token rides along in the session for the eligibility check below.
+  /// Deep-link callback registered in `supabase/config.toml` (local) and in
+  /// Supabase → Auth → URL Configuration (hosted), and mirrored by the intent filter
+  /// / `CFBundleURLTypes` entry the app's README asks for. Without it the browser
+  /// completes the flow somewhere the app never hears about.
+  static const String _nativeCallback = 'com.massanger.app://login-callback';
+
   Future<void> signInWithGoogle() async {
     try {
       // `access_type=offline` + `prompt=consent` makes Google return a refresh
@@ -40,7 +47,9 @@ class AccountRepository {
       // without asking the user to sign in again.
       await _client.auth.signInWithOAuth(
         OAuthProvider.google,
-        queryParameters: <String, String>{
+        // On the web the server's own redirect wins, so no callback is passed.
+        redirectTo: kIsWeb ? null : _nativeCallback,
+        queryParams: <String, String>{
           'access_type': 'offline',
           'prompt': 'consent',
         },

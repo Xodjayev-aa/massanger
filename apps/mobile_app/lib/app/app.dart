@@ -88,11 +88,11 @@ class _MassangerAppState extends State<MassangerApp> with WidgetsBindingObserver
 
   @override
   Widget build(BuildContext context) {
-    // The bound is `T extends StateStreamableSource<Object?>`, so a literal typed as
-    // `List<BlocProvider<Object>>` would not even compile: `BlocProviderBase` is the
-    // common supertype Dart can actually infer here.
+    // The provider bound is `T extends StateStreamableSource<Object?>`, so annotating
+    // this list `List<BlocProvider<Object>>` does not compile. flutter_bloc 8.1 does not
+    // export the common supertype's name either, so the type is left to inference.
     return MultiBlocProvider(
-      providers: <BlocProviderBase<Object?>>[
+      providers: [
         BlocProvider<AuthBloc>.value(value: _auth),
         BlocProvider<ChatsBloc>.value(value: _chats),
       ],

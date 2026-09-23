@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../app/di.dart';
 import '../../core/errors.dart';
 import '../../data/chat_repository.dart';
+import '../../data/models.dart';
 import '../../data/voice_service.dart';
 import '../auth/auth_bloc.dart';
 import '../chats/chats_bloc.dart';

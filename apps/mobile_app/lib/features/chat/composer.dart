@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../app/di.dart';
 import '../../core/errors.dart';
+import '../../data/models.dart';
 import '../../data/voice_service.dart';
 import 'chat_bloc.dart';
 
@@ -265,7 +266,9 @@ class ComposerState extends State<Composer> {
             final hasText = _text.text.trim().isNotEmpty;
             if (hasText) {
               return IconButton.filled(
-                onPressed: state.sending ? null : _send,
+                // `_canSend` is the one rule: nothing typed, or a send already in
+                // flight for this thread.
+                onPressed: _canSend ? _send : null,
                 icon: state.sending
                     ? const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.arrow_upward_rounded),
