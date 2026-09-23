@@ -42,53 +42,22 @@ jobs:
             tail -1 /tmp/analyze.txt
             echo '```'
           } > /tmp/report.md
-      - name: resolved api
+      - name: test
+        working-directory: apps/mobile_app
         run: |
-          CACHE="$HOME/.pub-cache/hosted/pub.dev"
+          set +e
+          flutter test --reporter expanded > /tmp/test.txt 2>&1
+          echo "exit: $?"
           {
             echo
-            echo "## Resolved package APIs"
+            echo "## \`flutter test\`"
             echo
             echo '```'
-            ls "$CACHE" | grep -E "^(record|record_platform_interface|gotrue|functions_client|storage_client|postgrest|supabase|supabase_flutter|bloc|flutter_bloc|go_router|just_audio|qr_flutter|photo_view|image_picker)" || true
-            echo "--- record: public classes"
-            grep -rn "^class \|^abstract class \|^mixin " "$CACHE"/record-*/lib/*.dart "$CACHE"/record-*/lib/src/*.dart 2>/dev/null | grep -v "^.*_platform" | head -20
-            echo "--- record: AudioRecorder/Record API"
-            grep -rnE "^\s+(Future<[A-Za-z?<>]+>|Stream<[A-Za-z?<>]+>|void|bool) [a-zA-Z_]+\(" "$CACHE"/record-*/lib/src/*.dart 2>/dev/null | head -40
-            echo "--- record_platform_interface: what Record declares"
-            grep -rnE "^\s+(abstract )?(Future<[A-Za-z?<>]+>|Stream<[A-Za-z?<>]+>|void|bool) [a-zA-Z_]+\(" "$CACHE"/record_platform_interface-*/lib/src/*.dart 2>/dev/null | head -30
-            echo "--- gotrue: AuthChangeEvent"
-            grep -rn "enum AuthChangeEvent" -A 16 "$CACHE"/gotrue-*/lib/ 2>/dev/null | head -22
-            echo "--- gotrue: onAuthStateChange stream type + AuthState"
-            grep -rn "class AuthState" -A 8 "$CACHE"/gotrue-*/lib/ 2>/dev/null | head -14
-            echo "--- functions_client: FunctionException"
-            grep -rn "class FunctionException" -A 22 "$CACHE"/functions_client-*/lib/ 2>/dev/null | head -28
-            echo "--- postgrest: PostgrestException"
-            grep -rn "class PostgrestException" -A 18 "$CACHE"/postgrest-*/lib/ 2>/dev/null | head -24
-            echo "--- storage_client: StorageException + FileOptions"
-            grep -rn "class StorageException" -A 10 "$CACHE"/storage_client-*/lib/ 2>/dev/null | head -14
-            echo "--- gotrue: signInWithOAuth signature (whole lib)"
-            grep -rn "Future<AuthResponse> signInWithOAuth" -A 20 "$CACHE"/gotrue-2.25.0/lib 2>/dev/null | head -30
-            echo "--- supabase_flutter: signInWithOAuth override (if any)"
-            grep -rn "signInWithOAuth" -A 16 "$CACHE"/supabase_flutter-2.15.4/lib 2>/dev/null | head -26
-            echo "--- supabase_flutter: RealtimeClientOptions"
-            grep -rn "class RealtimeClientOptions" -A 22 "$CACHE"/supabase_flutter-2.15.4/lib 2>/dev/null | head -26
-            echo "--- gotrue: AuthException fields"
-            grep -rn "class AuthException" -A 14 "$CACHE"/gotrue-2.25.0/lib 2>/dev/null | head -18
-            echo "--- storage_client: FileOptions"
-            grep -rn "class FileOptions" -A 18 "$CACHE"/storage_client-2.6.0/lib 2>/dev/null | head -22
-            echo "--- record: AudioEncoder values"
-            grep -rn "enum AudioEncoder" -A 14 "$CACHE"/record_platform_interface-1.6.0/lib 2>/dev/null | head -18
-            echo "--- supabase_flutter: fromEnvironment/initialize"
-            grep -rn "static Future<Supabase> initialize" -A 16 "$CACHE"/supabase_flutter-*/lib/src/supabase.dart 2>/dev/null | head -22
-            echo "--- go_router: refreshListenable type"
-            grep -rn "refreshListenable" "$CACHE"/go_router-*/lib/src/router.dart 2>/dev/null | head -6
-            echo "--- flutter_bloc: BlocProvider.value + BlocBuilder generics"
-            grep -rn "class BlocProvider" -A 8 "$CACHE"/flutter_bloc-*/lib/src/bloc_provider.dart 2>/dev/null | head -12
-            echo "--- bloc: emit visibility"
-            grep -rn "protected" -B 3 "$CACHE"/bloc-*/lib/src/bloc.dart 2>/dev/null | head -8
+            grep -E "^[0-9:]+ \+[0-9]+( ~[0-9]+)?( -[0-9]+)?( \[E\])?:|Failed to load|^  [a-zA-Z_.]+:|Expected:|Actual:|Which:|^ *[0-9]+ (passed|failed)|Some tests failed|All tests passed" /tmp/test.txt | tail -70
+            echo "---- raw tail ----"
+            tail -25 /tmp/test.txt
             echo '```'
-          } | head -c 42000 >> /tmp/report.md
+          } >> /tmp/report.md
       - name: post
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
