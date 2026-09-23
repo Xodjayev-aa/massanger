@@ -36,7 +36,9 @@ jobs:
             echo "## \`flutter analyze\`"
             echo
             echo '```'
-            grep -E "^ *(error|warning) •" /tmp/analyze.txt | head -140
+            grep -E "^ *(error|warning) •" /tmp/analyze.txt | head -120
+            echo "--- infos (style only, not fatal)"
+            grep -E "^ *info •" /tmp/analyze.txt | head -40
             tail -1 /tmp/analyze.txt
             echo '```'
           } > /tmp/report.md
@@ -65,8 +67,18 @@ jobs:
             grep -rn "class PostgrestException" -A 18 "$CACHE"/postgrest-*/lib/ 2>/dev/null | head -24
             echo "--- storage_client: StorageException + FileOptions"
             grep -rn "class StorageException" -A 10 "$CACHE"/storage_client-*/lib/ 2>/dev/null | head -14
-            echo "--- supabase_flutter: signInWithOAuth signature"
-            grep -rn "signInWithOAuth" -A 14 "$CACHE"/gotrue-*/lib/src/gotrue_client.dart 2>/dev/null | head -22
+            echo "--- gotrue: signInWithOAuth signature (whole lib)"
+            grep -rn "Future<AuthResponse> signInWithOAuth" -A 20 "$CACHE"/gotrue-2.25.0/lib 2>/dev/null | head -30
+            echo "--- supabase_flutter: signInWithOAuth override (if any)"
+            grep -rn "signInWithOAuth" -A 16 "$CACHE"/supabase_flutter-2.15.4/lib 2>/dev/null | head -26
+            echo "--- supabase_flutter: RealtimeClientOptions"
+            grep -rn "class RealtimeClientOptions" -A 22 "$CACHE"/supabase_flutter-2.15.4/lib 2>/dev/null | head -26
+            echo "--- gotrue: AuthException fields"
+            grep -rn "class AuthException" -A 14 "$CACHE"/gotrue-2.25.0/lib 2>/dev/null | head -18
+            echo "--- storage_client: FileOptions"
+            grep -rn "class FileOptions" -A 18 "$CACHE"/storage_client-2.6.0/lib 2>/dev/null | head -22
+            echo "--- record: AudioEncoder values"
+            grep -rn "enum AudioEncoder" -A 14 "$CACHE"/record_platform_interface-1.6.0/lib 2>/dev/null | head -18
             echo "--- supabase_flutter: fromEnvironment/initialize"
             grep -rn "static Future<Supabase> initialize" -A 16 "$CACHE"/supabase_flutter-*/lib/src/supabase.dart 2>/dev/null | head -22
             echo "--- go_router: refreshListenable type"

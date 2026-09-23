@@ -267,6 +267,9 @@ final class MessageItem {
       id: '${map['id']}',
       chatId: '${map['chat_id'] ?? map['chatId']}',
       kind: kind,
+      // `delivery_status` is what the ticks show; `chat_feed` also folds the
+      // telegram sync marker into it, so a mirrored row is never stuck at `pending`.
+      state: DeliveryState.parse(map['delivery_status']),
       // An attachment's caption lives in `body` too; the voice and photo renderers
       // draw it under the player so both stay in one column of the row.
       body: map['body'] as String?,
@@ -284,7 +287,7 @@ final class MessageItem {
       failureReason: map['failure_reason'] as String?,
       replyToId: map['reply_to_id'] as String?,
       replySenderName: map['reply_sender_name'] as String?,
-      replyBody: replyBody == null ? null : replyBody,
+      replyBody: replyBody,
       source: asString(map['source'], fallback: 'app'),
       clientMessageId: map['client_message_id'] as String?,
       tgMessageId: map['tg_message_id'] == null ? null : '${map['tg_message_id']}',

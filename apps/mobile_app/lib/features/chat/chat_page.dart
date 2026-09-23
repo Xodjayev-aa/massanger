@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../app/di.dart';
+import '../../core/errors.dart';
 import '../../data/chat_repository.dart';
 import '../../data/voice_service.dart';
 import '../auth/auth_bloc.dart';
 import '../chats/chats_bloc.dart';
 import '../chats/search_page.dart';
 import '../chats/widgets.dart';
-import '../../core/errors.dart';
 import 'chat_bloc.dart';
 import 'composer.dart';
 import 'message_bubble.dart';

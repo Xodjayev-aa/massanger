@@ -33,7 +33,9 @@ Future<void> main() async {
       // Local development against `supabase start` is http; production must be
       // https, which the platform enforces anyway.
       authOptions: const FlutterAuthClientOptions(authFlowType: AuthFlowType.pkce),
-      realtimeClientOptions: const RealtimeClientOptions(eventsPerSecondLimit: 20),
+      // Realtime's own throttle stays at the SDK default: the app subscribes to one
+      // channel per open screen and the server caps the firehose, so a client-side
+      // limit here would only hide a backlog that has to be drained anyway.
       debug: kDebugMode,
     );
     registerDependencies(env: env, client: Supabase.instance.client);

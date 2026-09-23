@@ -23,6 +23,12 @@ class ChatsRefreshRequested extends ChatsEvent {
   const ChatsRefreshRequested();
 }
 
+class ChatsUnreadCleared extends ChatsEvent {
+  const ChatsUnreadCleared(this.chatId);
+
+  final String chatId;
+}
+
 class ChatsQueryChanged extends ChatsEvent {
   const ChatsQueryChanged(this.query);
 
@@ -84,6 +90,7 @@ class ChatsBloc extends Bloc<ChatsEvent, ChatsState> {
     on<ChatsOpened>(_onOpened);
     on<ChatsRefreshRequested>((_, emit) => _load(emit));
     on<ChatsQueryChanged>((event, emit) => emit(state.copyWith(query: event.query)));
+    on<ChatsUnreadCleared>(_onUnreadCleared);
 
     // Wait for a validated session before the first read: a query fired during the
     // cold-start restore carries no JWT and would fail the whole list.
@@ -194,7 +201,14 @@ class ChatsBloc extends Bloc<ChatsEvent, ChatsState> {
 
   /// A thread the user opened has already been read: fold the badge down locally
   /// instead of waiting for the next `chat_summaries` round trip.
-  void clearUnread(String chatId) {
+  ///
+  /// It goes through an event rather than calling `emit` here: in bloc 8 `emit` is
+  /// only public inside an `on` handler, and state that changes off-book is state an
+  /// observer never sees.
+  void clearUnread(String chatId) => add(ChatsUnreadCleared(chatId));
+
+  void _onUnreadCleared(ChatsUnreadCleared event, Emitter<ChatsState> emit) {
+    final chatId = event.chatId;
     if (!state.chats.any((chat) => chat.chatId == chatId && chat.unreadCount != 0)) return;
     final chats = state.chats.map((chat) => chat.chatId == chatId ? chat.withUnread(0) : chat).toList(growable: false);
     emit(state.copyWith(chats: chats));

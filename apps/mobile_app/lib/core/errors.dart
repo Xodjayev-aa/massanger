@@ -24,14 +24,17 @@ class AppException implements Exception {
   factory AppException.wrap(Object error, [StackTrace? stack]) {
     if (error is AppException) return error;
     if (error is PostgrestException) {
+      // `code` is nullable and often empty for a policy violation, which is exactly
+      // the case where the message is the only useful thing to show.
+      final code = error.code;
       return AppException(
-        error.code.isEmpty ? 'database' : error.code,
+        code == null || code.isEmpty ? 'database' : code,
         _databaseMessage(error),
         cause: error,
       );
     }
     if (error is AuthException) {
-      return AppException('auth', error.message ?? 'Sign-in failed.', cause: error);
+      return AppException('auth', error.message.isEmpty ? 'Sign-in failed.' : error.message, cause: error);
     }
     if (error is StorageException) {
       final statusCode = error.statusCode;
@@ -62,15 +65,15 @@ class AppException implements Exception {
   /// surfaces that as a FunctionException whose details we have to read here.
   static String _functionMessage(FunctionException error) {
     // The functions return `{ok:false, error:{code, message}}`; the SDK puts that
-    // body in `details`, so prefer it over the transport-level statusText.
+    // body in `details`, so prefer it over the transport-level reason phrase.
     final details = error.details;
     if (details is Map) {
       final inner = details['error'];
       if (inner is Map && inner['message'] is String) return inner['message'] as String;
       if (details['message'] is String) return details['message'] as String;
     }
-    final statusText = error.statusText.trim();
-    return statusText.isEmpty ? 'The server rejected the request (${error.status}).' : statusText;
+    final reason = (error.reasonPhrase ?? '').trim();
+    return reason.isEmpty ? 'The server rejected the request (${error.status}).' : reason;
   }
 
   static int? _retryAfter(FunctionException error) {

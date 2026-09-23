@@ -35,7 +35,7 @@ class VoiceService {
   final StreamController<VoiceLevelEvent> _levels = StreamController<VoiceLevelEvent>.broadcast();
   final List<double> _peaks = <double>[];
 
-  Record? _recorder;
+  AudioRecorder? _recorder;
   StreamSubscription<Uint8List>? _subscription;
   RandomAccessFile? _file;
   String? _path;
@@ -60,8 +60,9 @@ class VoiceService {
   /// Checked before the mic opens, so the user gets a permission prompt rather than
   /// a half-started recorder that has to be torn down.
   Future<void> ensurePermission() async {
-    final granted = await Record().hasPermission();
-    if (granted != true) {
+    // `hasPermission` both checks and requests, so this is where the OS prompt
+    // appears — before any temp file or recorder is created.
+    if (!await AudioRecorder().hasPermission()) {
       throw const AppException('permission', 'Microphone access is needed for voice notes.');
     }
   }
@@ -79,14 +80,16 @@ class VoiceService {
     _frames = 0;
     _peaks.clear();
 
-    final recorder = Record();
+    final recorder = AudioRecorder();
     _recorder = recorder;
+    // Streaming rather than a recorder-managed file: the peaks below come from the
+    // same bytes that go to disk, and the 120 s cap is enforced here so the take
+    // ends as a message instead of being discarded by the platform.
     final stream = await recorder.startStream(
       RecordConfig(
         encoder: AudioEncoder.pcm16bits,
         sampleRate: sampleRate,
         numChannels: channels,
-        autoStop: false,
       ),
     );
 

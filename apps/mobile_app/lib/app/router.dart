@@ -31,12 +31,16 @@ class Routes {
 
 /// [auth] drives the redirect: an authenticated user never sees the sign-in page,
 /// and a user the age gate has not cleared never sees a chat.
-GoRouter buildRouter(AuthBloc auth) {
+///
+/// [refresh] is a separate listenable because go_router asks for a `Listenable` while
+/// a bloc is a stream; the app bridges one to the other so the bloc stays the single
+/// source of truth and the router is still built exactly once.
+GoRouter buildRouter(AuthBloc auth, Listenable refresh) {
   return GoRouter(
     initialLocation: Routes.chats,
     // The bloc is a ChangeNotifier, so a sign-in, a token expiry or a passing age
     // check re-runs `redirect` without any screen having to remember to navigate.
-    refreshListenable: auth,
+    refreshListenable: refresh,
     redirect: (context, state) {
       final status = auth.state.status;
       final location = state.matchedLocation;

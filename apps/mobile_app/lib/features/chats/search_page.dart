@@ -10,6 +10,7 @@ import '../../core/formatting.dart';
 import '../../data/chat_repository.dart';
 import '../../data/models.dart';
 import '../auth/auth_bloc.dart';
+import 'widgets.dart';
 
 /// Full-text search across every message the user can see.
 ///

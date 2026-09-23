@@ -141,20 +141,23 @@ class AuthBloc extends Bloc<AuthEvent, AuthUiState> {
   Future<void> _onSessionChanged(AuthSessionChanged event, Emitter<AuthUiState> emit) async {
     switch (event.change) {
       case sb.AuthChangeEvent.signedOut:
-      case sb.AuthChangeEvent.userDeleted:
         emit(AuthUiState(status: AppStatus.signedOut));
         return;
       case sb.AuthChangeEvent.tokenRefreshed:
         // Nothing about access changed; keep the profile we already validated.
         return;
-      case sb.AuthChangeEvent.signedUp:
       case sb.AuthChangeEvent.signedIn:
       case sb.AuthChangeEvent.initialSession:
       case sb.AuthChangeEvent.userUpdated:
+      case sb.AuthChangeEvent.passwordRecovery:
         // A fresh sign-in must reload the profile before the router lets the user
         // in: `access_state` decides the destination.
         if (state.isReady && event.change == sb.AuthChangeEvent.userUpdated) return;
         await _bootstrap(emit);
+        return;
+      default:
+        // `mfaChallengeVerified`, and the deprecated `userDeleted` that the library
+        // documents as never emitted: nothing the session UI needs to react to.
         return;
     }
   }

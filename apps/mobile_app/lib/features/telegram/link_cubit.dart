@@ -65,8 +65,17 @@ class LinkState extends Equatable {
         sealed: sealed ?? this.sealed,
         linked: linked ?? this.linked,
         busy: busy ?? this.busy,
-        error: identical(error, _keep) ? this.error : error,
+        error: identical(error, _keep) ? this.error : _describe(error),
       );
+
+  /// The sentinel above is what makes `error: null` mean "clear" rather than "keep";
+  /// this turns anything else — including a wrapped exception — into the one line of
+  /// copy the screen shows.
+  static String? _describe(Object? value) {
+    if (value == null) return null;
+    if (value is AppException) return value.message;
+    return value.toString();
+  }
 
   static const Object _keep = Object();
 

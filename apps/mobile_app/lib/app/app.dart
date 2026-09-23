@@ -35,13 +35,19 @@ class _MassangerAppState extends State<MassangerApp> with WidgetsBindingObserver
   late final GoRouter _router;
   Timer? _heartbeat;
 
+  /// go_router wants a [Listenable], and a bloc is a stream — this bridge is what
+  /// makes `redirect` re-run on an auth change without rebuilding the router.
+  final ValueNotifier<int> _routerTick = ValueNotifier<int>(0);
+  StreamSubscription<AuthUiState>? _routerTickSub;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _auth = AuthBloc(sl<AccountRepository>(), sl<TelegramRepository>())..add(const AuthStarted());
-    _chats = ChatsBloc(sl<ChatRepository>(), sl<TelegramRepository>(), auth: _auth);
-    _router = buildRouter(_auth);
+    _chats = ChatsBloc(sl<ChatRepository>(), auth: _auth);
+    _router = buildRouter(_auth, _routerTick);
+    _routerTickSub = _auth.stream.listen((_) => _routerTick.value++);
     _startHeartbeat();
   }
 
@@ -49,7 +55,7 @@ class _MassangerAppState extends State<MassangerApp> with WidgetsBindingObserver
   /// `last_seen_at` would advertise every contact as online at 3 a.m.
   void _startHeartbeat() {
     _heartbeat?.cancel();
-    if (WidgetsBinding.instance.lifecycleState != LifecycleState.resumed) return;
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
     _heartbeat = Timer.periodic(const Duration(seconds: 45), (_) {
       if (_auth.state.status == AppStatus.ready) unawaited(_auth.refreshPresence());
     });
@@ -72,6 +78,8 @@ class _MassangerAppState extends State<MassangerApp> with WidgetsBindingObserver
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _heartbeat?.cancel();
+    unawaited(_routerTickSub?.cancel() ?? Future<void>.value());
+    _routerTick.dispose();
     unawaited(_chats.close());
     unawaited(_auth.close());
     unawaited(disposeDependencies());
@@ -80,8 +88,11 @@ class _MassangerAppState extends State<MassangerApp> with WidgetsBindingObserver
 
   @override
   Widget build(BuildContext context) {
+    // The bound is `T extends StateStreamableSource<Object?>`, so a literal typed as
+    // `List<BlocProvider<Object>>` would not even compile: `BlocProviderBase` is the
+    // common supertype Dart can actually infer here.
     return MultiBlocProvider(
-      providers: <BlocProvider<Object>>[
+      providers: <BlocProviderBase<Object?>>[
         BlocProvider<AuthBloc>.value(value: _auth),
         BlocProvider<ChatsBloc>.value(value: _chats),
       ],

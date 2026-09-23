@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../app/di.dart';
 
+import '../../app/di.dart';
 import '../../app/theme.dart';
+import '../../core/errors.dart';
 import '../../core/formatting.dart';
 import '../../data/chat_repository.dart';
 import '../../data/models.dart';
@@ -97,7 +98,7 @@ class MessageBubble extends StatelessWidget {
     switch (message.kind) {
       case MessageKind.image:
         return <Widget>[
-          _Photo(message: message, mine: message.isMine),
+          _Photo(message: message),
           if ((message.body ?? '').isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -327,7 +328,6 @@ class VoiceBubble extends StatefulWidget {
 
 class _VoiceBubbleState extends State<VoiceBubble> {
   late final VoicePlayer _player = sl<VoicePlayer>();
-  String? _url;
   bool _resolving = false;
 
   @override
