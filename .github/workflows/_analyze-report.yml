@@ -1,0 +1,50 @@
+# TEMPORARY debug scaffold — delete once `flutter analyze` is green.
+#
+# The Actions *log* host is unreachable from some review environments, so this job
+# posts the analyzer's errors as a comment on the open pull request through the API
+# host instead. It changes nothing about the app.
+name: Analyze report (temporary)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.5
+      - name: pub get
+        working-directory: apps/mobile_app
+        run: flutter pub get | tail -5
+      - name: analyze
+        working-directory: apps/mobile_app
+        run: |
+          set +e
+          flutter analyze --no-fatal-infos --no-fatal-warnings > /tmp/analyze.txt 2>&1
+          {
+            echo "## \`flutter analyze\` (temporary report)"
+            echo
+            echo "\`\`\`"
+            grep -E "^ *(error|warning) •" /tmp/analyze.txt | head -180
+            tail -1 /tmp/analyze.txt
+            echo "\`\`\`"
+          } > /tmp/report.md
+          wc -l /tmp/report.md
+      - name: post
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY:$GITHUB_HEAD_NAME&state=open" --jq '.[0].number')
+          [ -n "$pr" ] || pr=1
+          gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file /tmp/report.md
