@@ -44,6 +44,12 @@ jobs:
     name: flutter
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Analyzer output lives in GitHub's Actions blob logs, which some networks
+    # cannot reach. Publish it as a check-run on failure so the diagnostics are
+    # retrievable through the GitHub API too (never include secrets in it).
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -62,8 +68,18 @@ jobs:
       # (sort_child_properties_last and friends); the Makefile keeps `fmt` as the
       # place where the house style is enforced.
       - name: analyze
+        id: analyze
         working-directory: apps/mobile_app
-        run: flutter analyze --no-fatal-infos
+        run: flutter analyze --no-fatal-infos 2>&1 | tee flutter-analyze.log
+      - name: publish analyzer diagnostics on failure
+        if: ${{ failure() && steps.analyze.outcome == 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          jq -n --arg sha "$HEAD_SHA" --rawfile log apps/mobile_app/flutter-analyze.log \
+            '{name:"Flutter analyzer diagnostics",head_sha:$sha,status:"completed",conclusion:"failure",output:{title:"Flutter analysis failed",summary:"Analyzer diagnostics (first 60000 characters)",text:($log[:60000])}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id
       - name: unit + widget tests
         working-directory: apps/mobile_app
         run: flutter test
