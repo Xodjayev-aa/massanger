@@ -27,12 +27,13 @@ import {
 import {
   mapIncomingMessage,
   planOutbound,
+  renderSelfNotice,
   sendOptions,
   type OutboundSend,
   type ResolvedMedia,
   type UploadedMedia,
 } from './render.js';
-import type { AccountContext, LinkClaim, OutboxRow } from './supabase.js';
+import type { AccountContext, LinkClaim, NotifyRow, OutboxRow } from './supabase.js';
 import { SupabaseBridge, SupabaseError } from './supabase.js';
 import {
   KoffiTransport,
@@ -62,6 +63,7 @@ export type SessionOptions = {
 };
 
 export type PumpResult = { sent: number; failed: number; parked: number; presence: number; reads: number };
+export type NoticeResult = { sent: number; failed: number; parked: number; skipped: number };
 
 export const TD_INT64_MAX = '9223372036854775807';
 
@@ -107,6 +109,8 @@ export class TelegramSession {
 
   #state: SessionState = 'init';
   #chats = new Map<string, ChatInfo>();
+  /** Own Telegram id and any discovered Saved Messages chat ids: never mirror these. */
+  #selfChatIds = new Set<string>();
   #chatQueue = new KeyedQueue<void>();
   #uploaded = new Map<number, UploadedMedia>();
   #tgMessageToOutbox = new Map<string, number>();
@@ -128,6 +132,8 @@ export class TelegramSession {
     sent: 0,
     failed: 0,
     parked: 0,
+    notices: 0,
+    notices_failed: 0,
     ingested: 0,
     duplicates: 0,
     downloads: 0,
@@ -139,6 +145,7 @@ export class TelegramSession {
 
   constructor(private readonly options: SessionOptions) {
     this.ownerUserId = options.context.user_id;
+    if (options.context.tg_user_id != null) this.#selfChatIds.add(String(options.context.tg_user_id));
     this.dataDir = path.join(options.config.dataDir, `tg-${this.ownerUserId}`);
     this.log =
       options.log ?? rootLogger.child({ owner: options.context.username, session: options.config.workerId });
@@ -236,6 +243,7 @@ export class TelegramSession {
       this.log.warn('logOut failed; destroying the session anyway', { error: (error as Error).message });
     }
     await this.options.db.setAccountState({ userId, authState: 'unlinked', note: 'unlinked from the app' });
+    await this.options.db.failNotify(userId, 'telegram account was unlinked').catch(() => undefined);
     await this.stop('logout');
   }
 
@@ -298,6 +306,126 @@ export class TelegramSession {
     result.presence = await this.#pumpPresence();
     result.reads = await this.#pumpReads();
     return result;
+  }
+
+  // ── offline notices: delivered by this recipient's own TDLib session ─────
+
+  async deliverNotices(rows: NotifyRow[]): Promise<NoticeResult> {
+    const result: NoticeResult = { sent: 0, failed: 0, parked: 0, skipped: 0 };
+    this.counters.lastPumpAt = Date.now();
+    // Saved Messages is one chat. Serialize sends through the same per-chat
+    // queue as the outbox, rather than racing two wake-ups for this account.
+    for (const row of rows) {
+      const chatId = String(row.tg_self_chat_id ?? row.tg_user_id ?? 'self');
+      await this.#chatQueue.enqueue(`send:${chatId}`, async () => {
+        const outcome = await this.#deliverOneNotice(row);
+        result[outcome]++;
+      });
+    }
+    return result;
+  }
+
+  async #deliverOneNotice(row: NotifyRow): Promise<keyof NoticeResult> {
+    const db = this.options.db;
+    if (row.user_id !== this.ownerUserId) {
+      this.log.error('notice was claimed for the wrong account', { notify_id: row.notify_id });
+      await db.completeNotify({ notifyId: row.notify_id, state: 'failed', error: 'wrong account session' });
+      this.counters.notices_failed++;
+      return 'failed';
+    }
+    if (!this.ready) {
+      await db.completeNotify({ notifyId: row.notify_id, state: 'queued', error: 'session not authorised', retrySeconds: 20 });
+      return 'parked';
+    }
+
+    const chatId = row.tg_self_chat_id ?? row.tg_user_id;
+    if (chatId == null || !/^\d+$/.test(String(chatId))) {
+      await db.completeNotify({ notifyId: row.notify_id, state: 'failed', error: 'Saved Messages chat is unknown' });
+      this.counters.notices_failed++;
+      return 'failed';
+    }
+    const target = String(chatId);
+    this.#selfChatIds.add(target);
+
+    try {
+      await this.#pace();
+      // A queue claim is not permission to send forever: an app read, mute,
+      // foreground heartbeat, or preference change may have happened while we
+      // waited for Telegram's per-user rate limit.
+      if (!(await db.noticeOwed(row.notify_id))) {
+        await db.completeNotify({ notifyId: row.notify_id, state: 'skipped' });
+        return 'skipped';
+      }
+      const response = await this.client.request<TdObject>('sendMessage', {
+        chat_id: target,
+        options: {
+          '@type': 'messageSendingOptions',
+          disable_notification: false,
+          from_background: true,
+          allow_sending_without_reply: true,
+          // No sending_id: this isn't an app message and must never correlate
+          // with a telegram_outbox bubble on the echo path.
+        },
+        input_message_content: {
+          '@type': 'inputMessageText',
+          text: { '@type': 'formattedText', text: renderSelfNotice(row), entities: [] },
+          link_preview_options: { '@type': 'linkPreviewOptions', is_disabled: true },
+        },
+        message_self_destruct_ttl: 0,
+      });
+      const actualChat = String(response.chat_id ?? target);
+      this.#selfChatIds.add(actualChat);
+      const completed = await db.completeNotify({
+        notifyId: row.notify_id,
+        state: 'sent',
+        tgMessageId: response.id == null ? null : String(response.id),
+        selfChatId: actualChat,
+      });
+      if (!completed) {
+        // Read/mute won the race while Telegram accepted the send. The database
+        // must *not* resurrect it, even though TDLib cannot unsend that message.
+        this.log.debug('notice completed after its lease was cancelled', { notify_id: row.notify_id });
+      }
+      this.counters.notices++;
+      return 'sent';
+    } catch (error) {
+      return this.#handleNoticeFailure(row, error);
+    }
+  }
+
+  async #handleNoticeFailure(row: NotifyRow, error: unknown): Promise<keyof NoticeResult> {
+    const db = this.options.db;
+    const message = error instanceof Error ? error.message : String(error);
+    const flood = floodWaitSeconds(message) ?? (error instanceof TdLibError ? error.floodWaitSeconds : null);
+    const fatal = /AUTH_KEY_UNREGISTERED|AUTH_KEY_INVALID|SESSION_REVOKED|SESSION_TERMINATED|USER_DEACTIVATED/i.test(message);
+    if (fatal) {
+      this.#authState = 'revoked';
+      this.#state = 'awaiting_auth';
+      await db.setAccountState({ userId: this.ownerUserId, authState: 'needs_reauth', error: message }).catch(() => undefined);
+      await db.failPendingSends(this.ownerUserId, 'telegram session was revoked').catch(() => undefined);
+      await db.failNotify(this.ownerUserId, 'telegram session was revoked').catch(() => undefined);
+      this.counters.notices_failed++;
+      return 'failed';
+    }
+
+    const badChat = /PEER_ID_INVALID|CHAT_NOT_FOUND|CHAT_WRITE_FORBIDDEN/i.test(message);
+    const exhausted = Number(row.attempts ?? 0) >= Number(row.max_attempts ?? 4);
+    const permanent = /MESSAGE_EMPTY|INPUT_FETCH_FAILED/i.test(message) ||
+      (error instanceof SupabaseError && !error.retryable);
+    if (exhausted || permanent) {
+      this.counters.notices_failed++;
+      await db.completeNotify({ notifyId: row.notify_id, state: 'failed', error: message }).catch(() => undefined);
+      return 'failed';
+    }
+
+    await db.completeNotify({
+      notifyId: row.notify_id,
+      state: 'queued',
+      error: message,
+      resetSelfChat: badChat,
+      retrySeconds: flood !== null ? Math.max(2, flood + 2) : badChat ? 60 : 30,
+    }).catch((dbError: Error) => this.log.warn('notice retry could not be recorded', { error: dbError.message }));
+    return 'parked';
   }
 
   async #sendOne(row: OutboxRow): Promise<'sent' | 'failed' | 'parked'> {
@@ -557,6 +685,13 @@ export class TelegramSession {
 
   // ── inbound updates ───────────────────────────────────────────────────────
 
+  #isSelfChat(chatId: string | number): boolean {
+    const id = String(chatId);
+    if (this.#selfChatIds.has(id)) return true;
+    const known = this.#chats.get(id);
+    return known?.type === 'private' && known.peerUserId != null && this.#selfChatIds.has(known.peerUserId);
+  }
+
   #onUpdate(update: TdObject): void {
     const type = update['@type'];
     switch (type) {
@@ -615,7 +750,7 @@ export class TelegramSession {
       case 'updateDeleteMessages': {
         const ids = (update.message_ids as (string | number)[] | undefined) ?? [];
         const chatId = Number(update.chat_id ?? NaN);
-        if (!Number.isFinite(chatId) || ids.length === 0) return;
+        if (!Number.isFinite(chatId) || ids.length === 0 || this.#isSelfChat(chatId)) return;
         void this.#chatQueue.enqueue(`in:${chatId}`, async () => {
           for (const id of ids) {
             this.#push({
@@ -633,7 +768,7 @@ export class TelegramSession {
       case 'updateReadOutboxChatHistory': {
         // The peer read our messages → the app's ticks turn blue.
         const chatId = Number(update.chat_id ?? NaN);
-        if (!Number.isFinite(chatId)) return;
+        if (!Number.isFinite(chatId) || this.#isSelfChat(chatId)) return;
         void this.#chatQueue.enqueue(`in:${chatId}`, async () => {
           this.#push({
             type: 'read',
@@ -652,7 +787,7 @@ export class TelegramSession {
       case 'updateChatReadInbox': {
         // We read the chat *on Telegram* → clear the badge in the app.
         const chatId = Number(update.chat_id ?? NaN);
-        if (!Number.isFinite(chatId)) return;
+        if (!Number.isFinite(chatId) || this.#isSelfChat(chatId)) return;
         const upTo = Number(update.max_read_message_id ?? update.last_read_inbox_message_id ?? NaN);
         void this.options.db
           .markInboxRead(this.ownerUserId, chatId, Number.isFinite(upTo) ? upTo : undefined)
@@ -662,7 +797,7 @@ export class TelegramSession {
       case 'updateUserChatAction': {
         const chatId = Number(update.chat_id ?? NaN);
         const chat = this.#chats.get(String(chatId));
-        if (!Number.isFinite(chatId) || !chat || chat.type !== 'private') return; // groups: see 00010
+        if (!Number.isFinite(chatId) || !chat || chat.type !== 'private' || this.#isSelfChat(chatId)) return; // groups: see 00010
         void this.options.db.reportTyping(this.ownerUserId, chatId, String((update.action as TdObject)?.['@type'] ?? ''));
         return;
       }
@@ -705,6 +840,7 @@ export class TelegramSession {
 
   async #ingestMessage(chatIdNumber: number, message: TdObject, isEdit: boolean): Promise<void> {
     const chatId = String(chatIdNumber);
+    if (this.#isSelfChat(chatId)) return; // Saved Messages is the notice transport, never an app thread.
     const info = this.#chats.get(chatId);
     if (!info || !info.chatId) {
       // Unknown chat: resolve it first (this is how a new Telegram conversation
@@ -712,6 +848,7 @@ export class TelegramSession {
       const chat = await this.client.request<TdObject>('getChat', { chat_id: chatId }).catch(() => null);
       if (chat) await this.#registerChat(chat, { silent: true });
     }
+    if (this.#isSelfChat(chatId)) return; // getChat may have revealed a non-obvious self-chat id.
     const known = this.#chats.get(chatId);
 
     const isOutgoing = message.is_outgoing === true;
@@ -1002,6 +1139,10 @@ export class TelegramSession {
         sessionRef: this.sessionRef,
       })
       .catch(() => undefined);
+    // On a restored TDLib session the server's user id is authoritative even
+    // if the cached account context predates a re-link.
+    const me = await this.client.request<TdObject>('getMe', {}).catch(() => null);
+    if (me?.id != null) this.#selfChatIds.add(String(me.id));
     await this.#prepareChats();
     await this.options.db
       .setAccountState({ userId: this.ownerUserId, authState: 'linked', note: 'connected', lastSync: true })
@@ -1087,6 +1228,10 @@ export class TelegramSession {
     const title = typeof chat.title === 'string' ? chat.title : null;
     const peerUserId =
       type === 'private' ? String((chat.type as TdObject | undefined)?.user_id ?? '') || null : null;
+    if (this.#isSelfChat(tgChatId) || (peerUserId && this.#selfChatIds.has(peerUserId))) {
+      this.#selfChatIds.add(tgChatId);
+      return; // no resolveChat / openChat / inbound history for Saved Messages
+    }
 
     let peer: { first?: string | null; last?: string | null; username?: string | null; avatar?: string | null } = {};
     if (peerUserId) {

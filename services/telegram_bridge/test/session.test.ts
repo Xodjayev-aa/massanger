@@ -17,7 +17,7 @@ import { TelegramSession } from '../src/session.js';
 import { TelegramSimulator } from '../src/simulator.js';
 import { SupabaseBridge } from '../src/supabase.js';
 import { aesKeyFromSecret, sealEnvelope, verifySignatureHeader } from '../src/util/envelope.js';
-import { CHAT_ID, accountContext, linkClaim, outboxRow, recorder, testConfig, until, type Recorder } from './helpers.js';
+import { CHAT_ID, accountContext, linkClaim, notifyRow, outboxRow, recorder, testConfig, until, type Recorder } from './helpers.js';
 
 const TG_CHAT = 5_001_337_420;
 
@@ -106,6 +106,97 @@ describe('telegram session', () => {
     const serialized = rec.calls.map((call) => call.body).join('\n');
     assert.ok(!serialized.includes('99999'), 'the plaintext code is never sent anywhere');
     assert.ok(!serialized.includes('+998901112233'), 'nor the phone number');
+  });
+
+  it('sends one folded notice into Saved Messages without mirroring the self-chat', async () => {
+    const { config, session, rec, sim } = harness;
+    // The own chat is in getChats at startup too: chat discovery must not make a
+    // MessengerX mirror even before a notice is sent.
+    sim.addChat({ id: 777_001, title: 'Saved Messages', type: 'private', peerUserId: 777_001 });
+    await session.start();
+    await linkInto(rec, config, session);
+    assert.ok(!rec.calls.some((call) =>
+      call.url.includes('bridge_resolve_chat') && String(call.json().p_tg_chat_id) === '777001'),
+      'Saved Messages stays out of the app chat list');
+
+    rec.reply('/rpc/bridge_notice_owed', true);
+    rec.reply('/rpc/bridge_complete_notify', true);
+    const result = await session.deliverNotices([notifyRow({ folded: 3, preview: 'oxirgi xabar' })]);
+    assert.deepEqual(result, { sent: 1, failed: 0, parked: 0, skipped: 0 });
+    assert.equal(session.counters.notices, 1);
+    assert.equal(sim.sentMessages.length, 1, 'exactly one Saved Messages bubble for a burst');
+    const sent = sim.sentMessages[0]!;
+    assert.equal(String(sent.chat_id), '777001');
+    assert.equal(((sent.content as any).text as any).text, 'MessengerX · Dilnoza\noxirgi xabar\n+2 more');
+    assert.equal((sent.content as any).link_preview_options.is_disabled, true);
+    assert.equal((sent as any).sending_id, null, 'a notice is not an app outbox echo');
+    const completed = rec.find('bridge_complete_notify')!.json();
+    assert.equal(completed.p_state, 'sent');
+    assert.equal(completed.p_self_chat_id, '777001', 'cache the chat id Telegram actually returned');
+    assert.ok(Number(completed.p_tg_message_id) > 0);
+    assert.ok(rec.find('bridge_notice_owed'), 'read/mute/foreground state checked at send time');
+
+    sim.injectIncoming({ chatId: 777_001, text: 'also saved here', isOutgoing: false });
+    sim.injectPeerRead(777_001, Number(sent.id));
+    await new Promise((resolve) => setTimeout(resolve, 30)); // settle simulator's queued echo
+    const events = rec.calls.filter((call) => call.url.includes('telegram-ingest'))
+      .flatMap((call) => call.json().events ?? []);
+    assert.ok(events.every((event: any) => event.tg_chat_id !== '777001'),
+      'echo, inbound, and read updates in Saved Messages never reach the app');
+    assert.ok(!rec.calls.some((call) => call.url.includes('bridge_mark_inbox_read') &&
+      String(call.json().p_tg_chat_id) === '777001'), 'read updates in Saved Messages stay private');
+  });
+
+  it('does not send a claimed notice if it was read or muted while waiting', async () => {
+    const { config, session, rec, sim } = harness;
+    await session.start();
+    await linkInto(rec, config, session);
+    rec.reply('/rpc/bridge_notice_owed', false);
+    rec.reply('/rpc/bridge_complete_notify', true);
+    const result = await session.deliverNotices([notifyRow()]);
+    assert.equal(result.skipped, 1);
+    assert.equal(sim.sentMessages.length, 0);
+    assert.equal(rec.find('bridge_complete_notify')!.json().p_state, 'skipped');
+  });
+
+  it('parks a notice on Telegram flood wait and resets a bad Saved Messages cache', async () => {
+    const { config, session, rec, sim } = harness;
+    await session.start();
+    await linkInto(rec, config, session);
+    rec.reply('/rpc/bridge_notice_owed', true);
+    sim.failNext('sendMessage', 420, 'FLOOD_WAIT_23');
+    const parked = await session.deliverNotices([notifyRow()]);
+    assert.equal(parked.parked, 1);
+    const retry = rec.find('bridge_complete_notify')!.json();
+    assert.equal(retry.p_state, 'queued');
+    assert.equal(retry.p_retry_in, '25 seconds');
+    assert.equal(retry.p_reset_self_chat, false);
+
+    rec.reply('/rpc/bridge_notice_owed', true);
+    sim.failNext('sendMessage', 400, 'PEER_ID_INVALID');
+    const badCache = await session.deliverNotices([notifyRow({ attempts: 2 })]);
+    assert.equal(badCache.parked, 1);
+    const fallback = rec.find('bridge_complete_notify')!.json();
+    assert.equal(fallback.p_state, 'queued');
+    assert.equal(fallback.p_retry_in, '60 seconds');
+    assert.equal(fallback.p_reset_self_chat, true);
+  });
+
+  it('fails a revoked session’s notice queue and never sends under the wrong account', async () => {
+    const { config, session, rec, sim } = harness;
+    await session.start();
+    await linkInto(rec, config, session);
+    rec.reply('/rpc/bridge_notice_owed', true);
+    sim.failNext('sendMessage', 401, 'AUTH_KEY_UNREGISTERED');
+    const failed = await session.deliverNotices([notifyRow()]);
+    assert.equal(failed.failed, 1);
+    assert.equal(session.ready, false);
+    assert.ok(rec.find('bridge_fail_notify'), 'remaining notices for this revoked account are failed');
+    assert.equal(rec.find('bridge_set_account_state')!.json().p_auth_state, 'needs_reauth');
+
+    const wrong = await session.deliverNotices([notifyRow({ user_id: CHAT_ID })]);
+    assert.equal(wrong.failed, 1);
+    assert.equal(rec.find('bridge_complete_notify')!.json().p_error, 'wrong account session');
   });
 
   it('sends a queued text message and reconciles the echo', async () => {

@@ -968,6 +968,8 @@ await test('a message to an offline recipient queues exactly one notice', async 
   eq(rows[0].folded, 1, 'a single message is not folded');
   eq(String(rows[0].chat_id), chatId);
   eq(rows[0].preview, 'qayerdasan?', 'the preview is the message text');
+  eq(new Date(rows[0].next_attempt_at).getTime() > Date.now(), true,
+     'a short quiet window lets a burst collapse before delivery');
   eq(rows[0].sender_name, 'Dilnoza Rustamova', 'the human label, not the username');
   eq(String(rows[0].sender_user_id), U.b);
   eq(await noticeCount(U.b), 0, 'the sender is never notified about their own message');
@@ -989,15 +991,11 @@ await test('a recipient who is back in the app is not buzzed', async () => {
   await sendAsDilnoza('endi koʻrdingmi?');
 
   const rows = await noticeRows(U.a);
-  eq(rows.length, 1, 'presence suppresses a new notice');
-  eq(rows[0].folded, 3, 'and does not grow the one already queued');
+  eq(rows.length, 0, 'returning online cancels the burst and suppresses new notices');
 
-  // Coming back online also cancels what was queued while away: the claim sweep
-  // re-checks `notify_row_owed`, so a notice never lands behind an open app.
   await becomeService();
   const claimed = await query(`select * from public.bridge_claim_notify('worker-1', null, 10)`);
   eq(claimed.length, 0, 'nothing is handed to the worker');
-  eq(await noticeCount(U.a, 'skipped'), 1, 'the row is skipped, not delivered');
 });
 
 await test('reading the chat cancels a queued notice', async () => {
@@ -1073,6 +1071,47 @@ await test('previews are a preference, and turning push off clears the queue', a
   eq(await noticeCount(U.a), 0, 'and nothing new is queued');
 });
 
+await test('a read after the claim invalidates its lease before delivery', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('sent just before read');
+
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  const [leased] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(!!leased, true, 'row leased');
+  eq(await scalar(`select public.bridge_notice_owed($1, 'not-the-worker')`, [leased.notify_id]), false,
+     'a different worker cannot send this lease');
+
+  await become(U.a);
+  await rpc('public.mark_chat_read', `'${chatId}'`);
+  await becomeService();
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9')`, [leased.notify_id]), false,
+     'the last-moment check sees the read');
+  eq(await scalar(`select state::text from public.notify_requests where id = $1`, [leased.notify_id]), 'skipped');
+  eq(await scalar(`select public.bridge_complete_notify($1, 'sent', 555003, 100, false, null, null)`,
+                  [leased.notify_id]), false, 'a late send cannot revive a cancelled row');
+});
+
+await test('turning push off cancels an already-leased notice', async () => {
+  await azizAway();
+  await sendAsDilnoza('turning off');
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  const [leased] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(!!leased, true, 'row leased');
+  await become(U.a);
+  await query(`select public.set_push_preferences(false, null)`);
+  await becomeService();
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9')`, [leased.notify_id]), false);
+  eq(await scalar(`select state::text from public.notify_requests where id = $1`, [leased.notify_id]), 'skipped');
+});
+
 await test('the queue is invisible to clients and unwritable by them', async () => {
   await becomeOwner();
   // The previous case turned Aziz's push off; the RLS assertion needs a known start.
@@ -1102,6 +1141,12 @@ await test('the bridge claims a notice, targets Saved Messages and caches the ch
   await sendAsDilnoza('claim me');
 
   await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', null, 5)`)).length, 0,
+     'the worker waits for the folding window');
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
   const claimed = await query(`select * from public.bridge_claim_notify('worker-9', null, 5)`);
   eq(claimed.length, 1, 'one claimable notice');
   const row = claimed[0];
@@ -1112,6 +1157,8 @@ await test('the bridge claims a notice, targets Saved Messages and caches the ch
   eq(row.folded, 1);
   eq(row.attempts, 1, 'claiming burns one attempt');
   eq(await scalar(`select state::text from public.notify_requests where id = $1`, [row.notify_id]), 'in_flight');
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9')`, [row.notify_id]), true,
+     'the recipient is still away and unread');
   eq((await query(`select * from public.bridge_claim_notify('worker-8', null, 5)`)).length, 0,
      'a second worker cannot steal the lease');
 
@@ -1130,6 +1177,9 @@ await test('a parked notice retries, a revoked session fails it, and history is 
   await azizAway();
   await sendAsDilnoza('flood wait');
 
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
   await becomeService();
   const [first] = await query(`select * from public.bridge_claim_notify('worker-1', null, 5)`);
   await exec(`select public.bridge_complete_notify($1, 'queued', null, null, false, 'flood_wait_12', '2 minutes')`,

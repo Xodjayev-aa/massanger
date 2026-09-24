@@ -258,6 +258,7 @@ async function runUnlink(ctx: LinkContext): Promise<LinkOutcome> {
     .setAccountState({ userId: claim.user_id, authState: 'unlinked', note: 'unlinked on request' })
     .catch(() => undefined);
   await db.failPendingSends(claim.user_id, 'telegram account was unlinked').catch(() => undefined);
+  await db.failNotify(claim.user_id, 'telegram account was unlinked').catch(() => undefined);
   return { result: 'unlinked', step: 'done', note: 'Telegram account unlinked' };
 }
 

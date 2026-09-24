@@ -256,7 +256,12 @@ $$;
  * Still owed? Re-checked at claim time, which is what makes "the user opened the
  * app 2 s ago" cancel a notice that was queued 2 min ago.
  */
-create or replace function app.notify_row_owed(p_user uuid, p_chat uuid, p_sender uuid)
+create or replace function app.notify_row_owed(
+  p_user uuid,
+  p_chat uuid,
+  p_sender uuid,
+  p_source public.message_source default 'app'
+)
 returns boolean
 language sql
 stable
@@ -264,6 +269,7 @@ security definer
 set search_path = pg_catalog, public
 as $$
   select app.notify_should_send(p_user, p_sender)
+     and not app.notify_already_buzzed(p_user, p_chat, p_source)
      and exists (
        select 1
          from public.chat_participants cp
@@ -327,7 +333,7 @@ begin
     v_preview := app.notify_body_preview(new, v_part.push_preview);
 
     insert into public.notify_requests as n (
-      user_id, chat_id, sender_user_id, sender_name, last_message_id, preview, source, folded
+      user_id, chat_id, sender_user_id, sender_name, last_message_id, preview, source, folded, next_attempt_at
     ) values (
       v_part.user_id,
       new.chat_id,
@@ -337,7 +343,8 @@ begin
       new.id,
       v_preview,
       new.source,
-      1
+      1,
+      clock_timestamp() + interval '3 seconds'
     )
     on conflict (user_id, chat_id) where state = 'queued'
     do update set
@@ -347,8 +354,10 @@ begin
       sender_name     = excluded.sender_name,
       last_message_id = excluded.last_message_id,
       source          = excluded.source,
-      -- A fresh message is worth re-trying now even if the row was parked.
-      next_attempt_at = clock_timestamp(),
+      -- Debounce for a short quiet window; without it a 3-second poll could
+      -- send one Saved Messages bubble per message in a rapid conversation.
+      next_attempt_at = clock_timestamp() + interval '3 seconds',
+      attempts        = 0,
       claimed_by      = null,
       claimed_at      = null,
       last_error      = null;
@@ -389,6 +398,12 @@ begin
      where n.user_id = v_user
        and n.chat_id = v_chat
        and n.state = 'queued';
+    -- A worker may have leased the row just before the read/mute. Mark it
+    -- skipped: bridge_notice_owed will refuse it, and a late completion cannot
+    -- turn it back into sent.
+    update public.notify_requests n
+       set state = 'skipped', last_error = 'read, muted or left'
+     where n.user_id = v_user and n.chat_id = v_chat and n.state = 'in_flight';
   end if;
 
   return coalesce(new, old);
@@ -410,10 +425,17 @@ begin
   if (new.push_telegram is false and old.push_telegram is true)
      or (new.access_state <> 'active' and old.access_state = 'active')
      or (new.deleted_at is not null and old.deleted_at is null)
+     or (new.last_seen_at is not null
+         and new.last_seen_at >= clock_timestamp() - interval '90 seconds'
+         and (old.last_seen_at is null
+              or old.last_seen_at < clock_timestamp() - interval '90 seconds'))
   then
     delete from public.notify_requests n
      where n.user_id = new.id
        and n.state = 'queued';
+    update public.notify_requests n
+       set state = 'skipped', last_error = 'profile changed'
+     where n.user_id = new.id and n.state = 'in_flight';
   end if;
 
   return new;
@@ -516,7 +538,7 @@ begin
          last_error    = 'no longer owed'
    where n.state = 'queued'
      and (p_owner is null or n.user_id = p_owner)
-     and not app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id);
+     and not app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id, n.source);
 
   update public.notify_requests n
      set state = case when n.attempts >= n.max_attempts then 'failed' else 'queued'
@@ -584,6 +606,27 @@ end;
 $$;
 
 /**
+ * A lease is a claim, not a promise to send. Check at the last possible moment
+ * before TDLib: a recipient may have opened, read, muted, unlinked, or disabled
+ * push after the claim. A missing/revoked lease is always false.
+ */
+create or replace function public.bridge_notice_owed(p_notify_id uuid, p_worker text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog, public
+as $$
+  select coalesce((
+    select n.state = 'in_flight'
+       and n.claimed_by = p_worker
+       and app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id, n.source)
+      from public.notify_requests n
+     where n.id = p_notify_id
+  ), false);
+$$;
+
+/**
  * Record the outcome of one delivery. `p_self_chat_id` caches the chat id
  * Telegram actually reported; `p_reset_self_chat` throws a bad cache away (the
  * next attempt falls back to the own user id).
@@ -620,7 +663,7 @@ begin
          next_attempt_at = case when p_state = 'queued' then clock_timestamp() + p_retry_in
                                 else n.next_attempt_at end
    where n.id = p_notify_id
-     and n.state in ('in_flight', 'queued')
+     and n.state = 'in_flight'
   returning n.user_id into v_owner;
   v_ok := found;
 
@@ -695,7 +738,10 @@ revoke all on public.notify_requests from public, anon, authenticated;
 
 grant execute on function public.set_push_preferences(boolean, boolean) to authenticated;
 
-grant execute on function public.bridge_claim_notify(text, uuid, integer, interval) to service_role;
+grant execute on function
+  public.bridge_claim_notify(text, uuid, integer, interval),
+  public.bridge_notice_owed(uuid, text)
+to service_role;
 grant execute on function
   public.bridge_complete_notify(uuid, public.outbox_state, bigint, bigint, boolean, text, interval),
   public.bridge_fail_notify(uuid, text),
@@ -704,6 +750,7 @@ to service_role;
 
 revoke execute on function
   public.bridge_claim_notify(text, uuid, integer, interval),
+  public.bridge_notice_owed(uuid, text),
   public.bridge_complete_notify(uuid, public.outbox_state, bigint, bigint, boolean, text, interval),
   public.bridge_fail_notify(uuid, text),
   public.prune_notify_requests(interval)
@@ -731,6 +778,8 @@ comment on function public.set_push_preferences(boolean, boolean) is
   'Offline notices: turn the Telegram push and/or the message preview on or off. Cancels queued work in the same call.';
 comment on function public.bridge_claim_notify(text, uuid, integer, interval) is
   'Lease offline notices for delivery; skips rows the user has since read, muted or come back online for.';
+comment on function public.bridge_notice_owed(uuid, text) is
+  'Last-moment read, mute and presence check on a worker-leased notice before sending to Telegram.';
 comment on function public.bridge_complete_notify(uuid, public.outbox_state, bigint, bigint, boolean, text, interval) is
   'Report one notice delivery (sent / requeue / failed) and cache the Saved Messages chat id Telegram reported.';
 comment on function public.bridge_fail_notify(uuid, text) is

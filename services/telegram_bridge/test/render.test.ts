@@ -14,6 +14,7 @@ import {
   parseMarkdown,
   planOutbound,
   renderMarkdown,
+  renderSelfNotice,
   sendOptions,
   sendingIdFor,
   splitText,
@@ -34,6 +35,26 @@ const row = (overrides: Partial<OutboxRow>): OutboxRow => ({
   session_ref: null,
   tg_user_id: null,
   ...overrides,
+});
+
+describe('self-chat notice text', () => {
+  it('includes the sender, latest preview and a burst count without adding a link', () => {
+    assert.equal(renderSelfNotice({ sender_name: 'Dilnoza', preview: 'qalaysiz?', folded: 1 }),
+      'MessengerX · Dilnoza\nqalaysiz?');
+    assert.equal(renderSelfNotice({ sender_name: 'Dilnoza', preview: 'ikkinchi', folded: 3 }),
+      'MessengerX · Dilnoza\nikkinchi\n+2 more');
+  });
+
+  it('respects a preview-free preference (no sender or body) and a missing sender', () => {
+    assert.equal(renderSelfNotice({ sender_name: 'Dilnoza', preview: '', folded: 1 }),
+      'MessengerX · new message');
+    assert.equal(renderSelfNotice({ sender_name: 'Dilnoza', preview: '', folded: 4 }),
+      'MessengerX · 4 new messages');
+    assert.equal(renderSelfNotice({ sender_name: '', preview: 'Photo', folded: 1 }),
+      'MessengerX\nPhoto', 'an empty sender does not double the MessengerX prefix');
+    assert.equal(renderSelfNotice({ sender_name: 'MessengerX', preview: 'Voice message', folded: 1 }),
+      'MessengerX\nVoice message');
+  });
 });
 
 describe('splitText', () => {

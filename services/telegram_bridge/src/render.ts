@@ -143,6 +143,30 @@ export function renderMarkdown(text: string, entities: TdObject[] | undefined): 
   return out;
 }
 
+// ── offline self-chat notices ───────────────────────────────────────────────
+
+export type SelfNoticeInput = {
+  sender_name: string;
+  preview: string;
+  folded: number;
+};
+
+/**
+ * Saved Messages displays this as a plain text message (not markdown — a sender
+ * called `**Alice**` must not inject TDLib entities). No app deep link is
+ * implied: the unread badge in MessengerX is the authority on what to open.
+ */
+export function renderSelfNotice(input: SelfNoticeInput): string {
+  const preview = (input.preview ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 140);
+  const folded = Math.max(1, Math.min(999, Math.trunc(Number(input.folded) || 1)));
+  if (!preview) {
+    return `MessengerX · ${folded === 1 ? 'new message' : `${folded} new messages`}`;
+  }
+  const name = (input.sender_name ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
+  const header = name && name !== 'MessengerX' ? `MessengerX · ${name}` : 'MessengerX';
+  return `${header}\n${preview}${folded > 1 ? `\n+${folded - 1} more` : ''}`;
+}
+
 // ── outbound ────────────────────────────────────────────────────────────────
 
 export type ResolvedMedia = {

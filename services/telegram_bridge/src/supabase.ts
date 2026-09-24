@@ -92,6 +92,26 @@ export type OutboxRow = {
   tg_user_id: string | null;
 };
 
+export type NotifyRow = {
+  /** `notify_requests.id` (uuid_v7). */
+  notify_id: string;
+  /** The *recipient*: the notice is delivered by their own Telegram session. */
+  user_id: string;
+  chat_id: string;
+  sender_name: string;
+  /** '' when the user turned previews off. */
+  preview: string;
+  /** How many messages this one notice stands for. */
+  folded: number;
+  /** Saved Messages chat id: cached value, else the account's own Telegram id. */
+  tg_self_chat_id: string | number | null;
+  tg_user_id: string | number | null;
+  session_ref: string | null;
+  attempts: number;
+  max_attempts: number;
+  queued_at: string;
+};
+
 export type AccountContext = {
   user_id: string;
   username: string;
@@ -290,6 +310,56 @@ export class SupabaseBridge {
       { p_owner: ownerUserId, p_error: reason.slice(0, 480) },
       { shape: 'scalar' },
     );
+  }
+
+  // ── offline notices (00012) ──────────────────────────────────────────────
+  claimNotify(ownerUserId: string | null = null, limit = this.config.outboxBatchSize): Promise<NotifyRow[]> {
+    return this.rpc<NotifyRow[]>('bridge_claim_notify', {
+      p_worker: this.config.workerId,
+      p_owner: ownerUserId,
+      p_limit: limit,
+      p_lease: `${this.config.outboxLeaseSeconds} seconds`,
+    }, { shape: 'set' }).then((rows) => rows ?? []);
+  }
+
+  /** Re-check read/mute/presence immediately before passing a claimed notice to TDLib. */
+  noticeOwed(notifyId: string): Promise<boolean> {
+    return this.rpc<boolean>('bridge_notice_owed', {
+      p_notify_id: notifyId,
+      p_worker: this.config.workerId,
+    }, { shape: 'scalar' });
+  }
+
+  completeNotify(input: {
+    notifyId: string;
+    state: 'sent' | 'failed' | 'skipped' | 'queued';
+    tgMessageId?: string | null;
+    selfChatId?: string | null;
+    resetSelfChat?: boolean;
+    error?: string | null;
+    retrySeconds?: number;
+  }): Promise<boolean> {
+    return this.rpc<boolean>('bridge_complete_notify', {
+      p_notify_id: input.notifyId,
+      p_state: input.state,
+      p_tg_message_id: input.tgMessageId ?? null,
+      p_self_chat_id: input.selfChatId ?? null,
+      p_reset_self_chat: input.resetSelfChat ?? false,
+      p_error: input.error ? input.error.slice(0, 480) : null,
+      p_retry_in: `${Math.max(1, input.retrySeconds ?? 30)} seconds`,
+    }, { shape: 'scalar' });
+  }
+
+  failNotify(ownerUserId: string, reason: string): Promise<number> {
+    return this.rpc<number>(
+      'bridge_fail_notify',
+      { p_owner: ownerUserId, p_error: reason.slice(0, 480) },
+      { shape: 'scalar' },
+    );
+  }
+
+  pruneNotify(): Promise<number> {
+    return this.rpc<number>('prune_notify_requests', {}, { shape: 'scalar' });
   }
 
   resolveChat(input: {
