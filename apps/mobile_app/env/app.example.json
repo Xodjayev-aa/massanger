@@ -3,5 +3,6 @@
   "SUPABASE_ANON_KEY": "paste-the-anon-key-from-supabase-start-output",
   "FUNCTION_BASE_URL": "",
   "DISABLE_REALTIME": "false",
-  "TELEGRAM_OIDC_ENABLED": "false"
+  "TELEGRAM_OIDC_ENABLED": "false",
+  "WEB_REDIRECT_URL": ""
 }

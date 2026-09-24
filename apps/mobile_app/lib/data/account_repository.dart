@@ -9,10 +9,11 @@ import 'models.dart';
 /// Supabase Auth, own profile and presence. Access state is server-managed by
 /// RLS and moderation; it is not inferred from Gmail or Drive content.
 class AccountRepository {
-  AccountRepository(this._client, {this.telegramLoginEnabled = false});
+  AccountRepository(this._client, {this.telegramLoginEnabled = false, this.webRedirectUrl});
 
   final SupabaseClient _client;
   final bool telegramLoginEnabled;
+  final String? webRedirectUrl;
 
   Stream<AuthState> get authChanges => _client.auth.onAuthStateChange;
 
@@ -35,7 +36,7 @@ class AccountRepository {
     try {
       await _client.auth.signInWithOAuth(
         OAuthProvider.google,
-        redirectTo: kIsWeb ? null : _nativeCallback,
+        redirectTo: kIsWeb ? (webRedirectUrl?.isNotEmpty == true ? webRedirectUrl : null) : _nativeCallback,
       );
     } on AuthException catch (error, stack) {
       throw AppException.wrap(error, stack);
@@ -56,7 +57,9 @@ class AccountRepository {
       await _client.auth.signInWithOAuth(
         const OAuthProvider('custom:telegram'),
         scopes: 'openid profile phone',
-        redirectTo: kIsWeb ? Uri.base.origin : _nativeCallback,
+        redirectTo: kIsWeb
+            ? (webRedirectUrl?.isNotEmpty == true ? webRedirectUrl : Uri.base.origin)
+            : _nativeCallback,
       );
     } on AuthException catch (error, stack) {
       throw AppException.wrap(error, stack);

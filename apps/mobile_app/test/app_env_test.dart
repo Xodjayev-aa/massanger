@@ -38,6 +38,22 @@ void main() {
       expect(configured.realtimeUrl.toString(), 'wss://abcdef12345.supabase.co/realtime/v1/websocket');
     });
 
+    test('web OAuth redirects preserve the static host base path', () {
+      const githubPages = AppEnv(
+        supabaseUrl: 'https://abcdef12345.supabase.co',
+        supabaseAnonKey: 'public-key',
+        webRedirectUrl: 'https://xodjayev-aa.github.io/massanger/',
+      );
+      expect(githubPages.webRedirectUrl, 'https://xodjayev-aa.github.io/massanger/');
+      githubPages.validate();
+      const invalid = AppEnv(
+        supabaseUrl: 'https://abcdef12345.supabase.co',
+        supabaseAnonKey: 'public-key',
+        webRedirectUrl: 'http://untrusted.test/with?query=secret',
+      );
+      expect(invalid.validate, throwsStateError);
+    });
+
     test('Telegram OIDC remains off until a hosted callback has been verified', () {
       expect(configured.telegramOidcEnabled, false);
       const verifiedHost = AppEnv(

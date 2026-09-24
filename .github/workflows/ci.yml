@@ -48,7 +48,9 @@ jobs:
     # cannot reach. Publish it as a check-run on failure so the diagnostics are
     # retrievable through the GitHub API too (never include secrets in it).
     permissions:
-      contents: read
+      # Only the explicit, branch-guarded manual run uses this to record generated
+      # native source. PR runs never push or publish build artifacts.
+      contents: write
       checks: write
     steps:
       - uses: actions/checkout@v4
@@ -56,11 +58,14 @@ jobs:
         with:
           channel: stable
           flutter-version: 3.24.5   # matches the pubspec constraint; bump together with it
-      # Native scaffolding is generated from the app's declared project name until
-      # it can be checked in. The tracked web/ directory is built directly.
+      # Keep existing reviewed native settings; only generate when missing.
+      # The tracked web/ directory is built directly.
       - name: generate native projects for build verification
         working-directory: apps/mobile_app
-        run: flutter create --platforms=android,ios --org com.messengerx --project-name messengerx_app .
+        run: |
+          if [[ ! -d android || ! -d ios ]]; then
+            flutter create --platforms=android,ios --org com.messengerx --project-name messengerx_app .
+          fi
       - name: pub get
         working-directory: apps/mobile_app
         run: flutter pub get
@@ -119,14 +124,77 @@ jobs:
             apps/mobile_app/android
             apps/mobile_app/ios
           retention-days: 1
+      - name: add native source to the fixed session branch for review
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/arena/01a0d3aa-massanger'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/mobile_app/android apps/mobile_app/ios
+          git diff --cached --check
+          if ! git diff --cached --quiet; then
+            git commit -m 'Add generated Flutter Android and iOS projects for review'
+            git push origin HEAD:arena/01a0d3aa-massanger
+          fi
+
+  # Optional public site on GitHub Pages (free repo subpath). This job is never
+  # triggered by PRs or a push. The operator must provision a real hosted
+  # Supabase project + worker, enable Pages from Actions and explicitly opt in
+  # via repository variables before running the workflow manually.
+  pages:
+    name: deploy public PWA (opt-in)
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/arena/01a0d3aa-massanger' &&
+          vars.LAUNCH_APPROVED == 'true' &&
+          vars.SUPABASE_URL != '' && vars.SUPABASE_ANON_KEY != '' }}
+    needs: [server, app]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.5
+      - run: flutter pub get
+        working-directory: apps/mobile_app
+      - name: build real website under the repository base path
+        working-directory: apps/mobile_app
+        env:
+          PUBLIC_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          PUBLIC_SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          TELEGRAM_OIDC_ENABLED: ${{ vars.TELEGRAM_OIDC_ENABLED }}
+        run: |
+          flutter build web --release --base-href=/massanger/ \
+            --dart-define="SUPABASE_URL=$PUBLIC_SUPABASE_URL" \
+            --dart-define="SUPABASE_ANON_KEY=$PUBLIC_SUPABASE_ANON_KEY" \
+            --dart-define="WEB_REDIRECT_URL=https://xodjayev-aa.github.io/massanger/" \
+            --dart-define="TELEGRAM_OIDC_ENABLED=${TELEGRAM_OIDC_ENABLED:-false}"
+          # Pages has no SPA rewrite; the 404 copy lets browser reloads of
+          # /massanger/chats/... load the client router rather than an HTML error.
+          cp build/web/index.html build/web/404.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/mobile_app/build/web
+      - name: deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
 
   # Builds (never pushes) the worker image so a Dockerfile or TDLib pin that stopped
   # compiling is caught before someone deploys it.
   image:
     name: bridge image builds
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    timeout-minutes: 30
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
