@@ -918,6 +918,245 @@ await test('expired presence rows are pruned, not left hanging', async () => {
 });
 
 // ---------------------------------------------------------------------------
+group('offline notices (00012)');
+
+/**
+ * The queue is bridge-internal: every read here happens as the owner, because a
+ * client role has neither the grant nor an RLS policy (asserted below).
+ */
+const noticeRows = async (userId = U.a) => {
+  await becomeOwner();
+  return query(`select * from public.notify_requests where user_id = '${userId}' order by id`);
+};
+const noticeCount = async (userId = U.a, state = 'queued') => {
+  await becomeOwner();
+  return Number(await scalar(
+    `select count(*)::int from public.notify_requests where user_id = '${userId}' and state = '${state}'`));
+};
+/** Dilnoza writes to Aziz; `chatId` is the direct chat created in the messaging group. */
+const sendAsDilnoza = async (text) => {
+  await become(U.b);
+  await rpc('public.send_message', `'${chatId}', 'text', '${text}', null, null, null`);
+};
+const azizAway = async () => {
+  await becomeOwner();
+  await exec(`update public.profiles
+                 set last_seen_at = clock_timestamp() - interval '10 minutes',
+                     access_state = 'active', deleted_at = null,
+                     push_telegram = true, push_preview = true
+               where id = '${U.a}'`);
+};
+
+await test('a message to an offline recipient queues exactly one notice', async () => {
+  await becomeOwner();
+  await exec(`
+    delete from public.notify_requests;
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 200, sync_direction = 'both',
+           self_chat_id = null, linked_at = clock_timestamp() where user_id = '${U.b}';
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 100, sync_direction = 'both',
+           self_chat_id = null where user_id = '${U.a}';
+    update public.chat_participants set unread_count = 0, muted_until = null, left_at = null
+     where chat_id = '${chatId}';
+  `);
+  await azizAway();
+
+  await sendAsDilnoza('qayerdasan?');
+
+  const rows = await noticeRows(U.a);
+  eq(rows.length, 1, 'one queued notice');
+  eq(rows[0].state, 'queued');
+  eq(rows[0].folded, 1, 'a single message is not folded');
+  eq(String(rows[0].chat_id), chatId);
+  eq(rows[0].preview, 'qayerdasan?', 'the preview is the message text');
+  eq(rows[0].sender_name, 'Dilnoza Rustamova', 'the human label, not the username');
+  eq(String(rows[0].sender_user_id), U.b);
+  eq(await noticeCount(U.b), 0, 'the sender is never notified about their own message');
+});
+
+await test('a burst folds into one row and keeps the newest preview', async () => {
+  await sendAsDilnoza('birinchi');
+  await sendAsDilnoza('ikkinchi');
+
+  const rows = await noticeRows(U.a);
+  eq(rows.length, 1, 'a burst is one notification, not three');
+  eq(rows[0].folded, 3, 'folded counter');
+  eq(rows[0].preview, 'ikkinchi', 'the preview follows the latest message');
+});
+
+await test('a recipient who is back in the app is not buzzed', async () => {
+  await becomeOwner();
+  await exec(`update public.profiles set last_seen_at = clock_timestamp() where id = '${U.a}'`);
+  await sendAsDilnoza('endi koʻrdingmi?');
+
+  const rows = await noticeRows(U.a);
+  eq(rows.length, 1, 'presence suppresses a new notice');
+  eq(rows[0].folded, 3, 'and does not grow the one already queued');
+
+  // Coming back online also cancels what was queued while away: the claim sweep
+  // re-checks `notify_row_owed`, so a notice never lands behind an open app.
+  await becomeService();
+  const claimed = await query(`select * from public.bridge_claim_notify('worker-1', null, 10)`);
+  eq(claimed.length, 0, 'nothing is handed to the worker');
+  eq(await noticeCount(U.a, 'skipped'), 1, 'the row is skipped, not delivered');
+});
+
+await test('reading the chat cancels a queued notice', async () => {
+  await azizAway();
+  await sendAsDilnoza('oʻqilmagan xabar');
+  eq(await noticeCount(U.a), 1, 'queued while away');
+
+  await become(U.a);
+  await rpc('public.mark_chat_read', `'${chatId}'`);
+  eq(await noticeCount(U.a), 0, 'reading deletes the queued notice');
+});
+
+await test('a muted chat stays silent, and unmuting restores delivery', async () => {
+  await becomeOwner();
+  await exec(`update public.chat_participants
+                 set muted_until = clock_timestamp() + interval '1 hour', unread_count = 0
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await sendAsDilnoza('muted chat');
+  eq(await noticeCount(U.a), 0, 'mute is respected at queue time');
+
+  await becomeOwner();
+  await exec(`update public.chat_participants set muted_until = null
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await sendAsDilnoza('unmuted');
+  eq(await noticeCount(U.a), 1, 'unmuting brings the buzz back');
+});
+
+await test('traffic the user\'s own Telegram delivered is not announced twice', async () => {
+  await becomeOwner();
+  await exec(`
+    delete from public.notify_requests;
+    insert into public.telegram_chats (owner_user_id, tg_chat_id, tg_chat_type, chat_id, peer_user_id, sync_direction)
+    values ('${U.a}', ${TG_CHAT_STR}, 'private', '${chatId}', 9999, 'both')
+    on conflict (owner_user_id, tg_chat_id)
+    do update set chat_id = excluded.chat_id, sync_direction = 'both';
+  `);
+  await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
+              values ('${chatId}', '${U.b}', 'text', 'kelgan xabar', 'telegram', 900001)`);
+  eq(await noticeCount(U.a), 0, 'mirrored Telegram traffic already buzzed on their phone');
+
+  // Same traffic, but the recipient does not mirror this chat: now it *is* news.
+  await exec(`delete from public.telegram_chats where owner_user_id = '${U.a}' and chat_id = '${chatId}'`);
+  await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
+              values ('${chatId}', '${U.b}', 'text', 'mapped emas', 'telegram', 900002)`);
+  eq(await noticeCount(U.a), 1, 'an unmapped mirror is announced');
+  const [row] = await noticeRows(U.a);
+  eq(row.source, 'telegram');
+});
+
+await test('previews are a preference, and turning push off clears the queue', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('birinchi maxfiy');
+  eq((await noticeRows(U.a))[0].preview, 'birinchi maxfiy', 'previews on by default');
+
+  await become(U.a);
+  const [prefs] = await query(`select public.set_push_preferences(null, false) as p`);
+  eq(prefs.p.push_preview, false, 'the RPC echoes the new preference');
+  eq(prefs.p.push_telegram, true);
+  eq((await noticeRows(U.a))[0].preview, '', 'already-queued text is wiped immediately');
+
+  await sendAsDilnoza('ikkinchi maxfiy');
+  const folded = await noticeRows(U.a);
+  eq(folded.length, 1);
+  eq(folded[0].folded, 2, 'still folded');
+  eq(folded[0].preview, '', 'and still content-free');
+
+  await become(U.a);
+  await query(`select public.set_push_preferences(false, null) as p`);
+  eq(await noticeCount(U.a), 0, 'push off deletes the queued notice');
+  await sendAsDilnoza('push oʻchirilgan');
+  eq(await noticeCount(U.a), 0, 'and nothing new is queued');
+});
+
+await test('the queue is invisible to clients and unwritable by them', async () => {
+  await becomeOwner();
+  // The previous case turned Aziz's push off; the RLS assertion needs a known start.
+  await exec(`update public.profiles set push_telegram = true where id = '${U.a}'`);
+  await become(U.b);
+  await throws(() => exec(`select count(*) from public.notify_requests`), /permission denied/);
+  await throws(() => exec(`select public.bridge_claim_notify('worker-1', null, 5)`), /permission denied/);
+  // RLS filters silently rather than raising, so the assertion is "nothing changed".
+  await exec(`update public.profiles set push_telegram = false where id = '${U.a}'`);
+  await becomeOwner();
+  eq(await scalar(`select push_telegram from public.profiles where id = '${U.a}'`), true,
+     'another user cannot turn off someone else\'s notices');
+  // self_chat_id is bridge-managed, like the rest of the session row
+  await become(U.a);
+  await throws(() => exec(`update public.telegram_accounts set self_chat_id = 1 where user_id = '${U.a}'`),
+               /managed by the bridge/);
+});
+
+await test('the bridge claims a notice, targets Saved Messages and caches the chat id', async () => {
+  await becomeOwner();
+  await exec(`
+    delete from public.notify_requests;
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 100, sync_direction = 'both',
+           self_chat_id = null where user_id = '${U.a}';
+  `);
+  await azizAway();
+  await sendAsDilnoza('claim me');
+
+  await becomeService();
+  const claimed = await query(`select * from public.bridge_claim_notify('worker-9', null, 5)`);
+  eq(claimed.length, 1, 'one claimable notice');
+  const row = claimed[0];
+  eq(String(row.user_id), U.a, 'the recipient owns the session that delivers it');
+  eq(String(row.tg_self_chat_id), '100', 'Saved Messages falls back to the own Telegram id');
+  eq(String(row.tg_user_id), '100');
+  eq(row.preview, 'claim me');
+  eq(row.folded, 1);
+  eq(row.attempts, 1, 'claiming burns one attempt');
+  eq(await scalar(`select state::text from public.notify_requests where id = $1`, [row.notify_id]), 'in_flight');
+  eq((await query(`select * from public.bridge_claim_notify('worker-8', null, 5)`)).length, 0,
+     'a second worker cannot steal the lease');
+
+  await exec(`select public.bridge_complete_notify($1, 'sent', 555001, 777001, false, null, null)`, [row.notify_id]);
+  const done = await one(`select * from public.notify_requests where id = $1`, [row.notify_id]);
+  eq(done.state, 'sent');
+  eq(String(done.tg_message_id), '555001');
+  eq(String(done.tg_self_chat_id), '777001');
+  eq(await scalar(`select self_chat_id::text from public.telegram_accounts where user_id = '${U.a}'`), '777001',
+     'the discovered chat id is cached for the next notice');
+});
+
+await test('a parked notice retries, a revoked session fails it, and history is pruned', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('flood wait');
+
+  await becomeService();
+  const [first] = await query(`select * from public.bridge_claim_notify('worker-1', null, 5)`);
+  await exec(`select public.bridge_complete_notify($1, 'queued', null, null, false, 'flood_wait_12', '2 minutes')`,
+    [first.notify_id]);
+  const parked = await one(`select * from public.notify_requests where id = $1`, [first.notify_id]);
+  eq(parked.state, 'queued', 'requeued, not lost');
+  eq(parked.last_error, 'flood_wait_12');
+  eq(parked.claimed_by, null, 'the lease is released');
+  eq((await query(`select * from public.bridge_claim_notify('worker-1', null, 5)`)).length, 0,
+     'and it is not claimable before the retry time');
+
+  eq(Number(await scalar(`select public.bridge_fail_notify('${U.a}', 'telegram session was revoked')`)), 1,
+     'a revoked session fails the owner\'s queue');
+  eq(await scalar(`select state::text from public.notify_requests where id = $1`, [first.notify_id]), 'failed');
+
+  // `notify_requests_touch` keeps updated_at honest, so old history is inserted
+  // rather than backdated — which is also what the retention window must survive.
+  await becomeOwner();
+  await exec(`insert into public.notify_requests
+                (user_id, chat_id, sender_name, state, created_at, updated_at)
+              values ('${U.a}', '${chatId}', 'Dilnoza Rustamova', 'sent',
+                      clock_timestamp() - interval '4 days', clock_timestamp() - interval '4 days')`);
+  eq(Number(await scalar(`select public.prune_notify_requests()`)), 1, 'terminal rows past the window are pruned');
+  eq(await scalar(`select count(*)::int from public.notify_requests`), 1, 'recent history is kept');
+});
+
+// ---------------------------------------------------------------------------
 await becomeOwner();
 const failed = results.filter((r) => !r.ok);
 let lastGroup = null;
