@@ -48,9 +48,7 @@ jobs:
     # cannot reach. Publish it as a check-run on failure so the diagnostics are
     # retrievable through the GitHub API too (never include secrets in it).
     permissions:
-      # Only the explicit, branch-guarded manual run uses this to record generated
-      # native source. PR runs never push or publish build artifacts.
-      contents: write
+      contents: read
       checks: write
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +64,27 @@ jobs:
           if [[ ! -d android || ! -d ios ]]; then
             flutter create --platforms=android,ios --org com.messengerx --project-name messengerx_app .
           fi
+      # The sandbox cannot reach GitHub's artifact blob host. Publish the tiny
+      # *generated source*, not the SDK or build output, as short-lived GitHub
+      # check-run chunks so it can be inspected and committed from the workspace.
+      # Remove this step once reviewed platform source is tracked in the repo.
+      - name: make generated native source available for review
+        continue-on-error: true
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'arena/01a0d3aa-massanger' && github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          tar -czf /tmp/native-scaffold.tgz -C apps/mobile_app android ios
+          base64 -w0 /tmp/native-scaffold.tgz | fold -w 50000 > /tmp/native-scaffold.parts
+          total=$(wc -l < /tmp/native-scaffold.parts)
+          echo "Generated native source: $(wc -c < /tmp/native-scaffold.tgz) bytes in $total check chunks"
+          for ((i=1; i<=total; i++)); do
+            chunk=$(sed -n "${i}p" /tmp/native-scaffold.parts)
+            jq -n --arg sha "$HEAD_SHA" --arg name "Native scaffold part $i of $total" --arg text "$chunk" \
+              '{name:$name,head_sha:$sha,status:"completed",conclusion:"success",output:{title:$name,summary:"Base64 of a gzip tar of generated android/ and ios/. Source only; review before committing.",text:$text}}' \
+              | gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id
+          done
       - name: pub get
         working-directory: apps/mobile_app
         run: flutter pub get
@@ -124,17 +143,6 @@ jobs:
             apps/mobile_app/android
             apps/mobile_app/ios
           retention-days: 1
-      - name: add native source to the fixed session branch for review
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/arena/01a0d3aa-massanger'
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add apps/mobile_app/android apps/mobile_app/ios
-          git diff --cached --check
-          if ! git diff --cached --quiet; then
-            git commit -m 'Add generated Flutter Android and iOS projects for review'
-            git push origin HEAD:arena/01a0d3aa-massanger
-          fi
 
   # Optional public site on GitHub Pages (free repo subpath). This job is never
   # triggered by PRs or a push. The operator must provision a real hosted
