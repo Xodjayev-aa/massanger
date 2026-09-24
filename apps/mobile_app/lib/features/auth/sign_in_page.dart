@@ -6,9 +6,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/errors.dart';
 import 'auth_bloc.dart';
 
-/// The only sign-in path: Google, because the age rule is defined on a Google
-/// account. Phone sign-in is not offered here — it exists for the Telegram link
-/// flow, not for account creation.
+/// Google sign-in for MessengerX. Telegram phone + code is a separate TDLib
+/// linking step after sign-in; standalone Telegram identity sign-in is not yet
+/// implemented and must not be advertised as a working option.
 class SignInPage extends StatefulWidget {
   const SignInPage({super.key});
 
@@ -57,8 +57,8 @@ class _SignInPageState extends State<SignInPage> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'MessengerX links an existing Telegram account and mirrors it, two ways, '
-                    'on your terms. Sign in with Google — we only check how old the account is.',
+                    'Sign in with Google to use MessengerX. To message people on Telegram, '
+                    'connect your own Telegram account with its phone number and login code after signing in.',
                     style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 32),
@@ -75,8 +75,8 @@ class _SignInPageState extends State<SignInPage> {
                   ],
                   const SizedBox(height: 24),
                   Text(
-                    'No Google account older than a year, no MessengerX. That is the whole rule, '
-                    'and it is checked on the server.',
+                    'Google sign-in does not grant access to your Gmail or Drive. '
+                    'Telegram will send a code when you choose to connect your account.',
                     style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     textAlign: TextAlign.center,
                   ),

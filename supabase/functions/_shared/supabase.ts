@@ -50,13 +50,10 @@ export function decodeJwtUnverified(token: string): DecodedJwt {
 const seconds = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
-/**
- * Verifies the token's signature with the project JWT secret (HS256) *and*
- * checks exp/nbf/aud/iss. That makes the functions safe even if the request
- * arrived from inside the VPC, where the API gateway may have already
- * terminated TLS. `getUser()` on the admin client is then used to confirm the
- * user still exists and is not banned.
- */
+/** Cheap preflight only. Hosted projects may issue ES256/RS256 user tokens;
+ * for them the trusted GoTrue `getUser(token)` request in requireUser is the
+ * authoritative signature check. HS256 projects also get a local HMAC check
+ * when SUPABASE_JWT_SECRET is available. Never authorize using payload alone. */
 export async function verifyJwt(env: Env, token: string): Promise<{ payload: Record<string, unknown> }> {
   const { header, payload, signature, raw } = decodeJwtUnverified(token);
   const now = Math.floor(Date.now() / 1000);
@@ -67,12 +64,12 @@ export async function verifyJwt(env: Env, token: string): Promise<{ payload: Rec
   if (nbf !== null && nbf - 5 > now) throw new HttpError('unauthorized', 'token not valid yet');
 
   const role = typeof payload.role === 'string' ? payload.role : '';
-  if (role !== 'authenticated' && role !== 'anon' && role !== 'service_role') {
-    throw new HttpError('unauthorized', `unexpected token role ${role || '(none)'}`);
+  if (role !== 'authenticated') throw new HttpError('unauthorized', 'a user session is required');
+  if (header.alg !== 'HS256' && header.alg !== 'ES256' && header.alg !== 'RS256') {
+    throw new HttpError('unauthorized', 'unsupported token algorithm');
   }
-  if (header.alg !== 'HS256') throw new HttpError('unauthorized', 'unsupported token algorithm');
 
-  if (env.jwtSecret) {
+  if (header.alg === 'HS256' && env.jwtSecret) {
     const key = await crypto.subtle.importKey(
       'raw',
       new TextEncoder().encode(env.jwtSecret),
@@ -116,7 +113,9 @@ export async function requireUser(env: Env, token: string | null): Promise<Calle
 
   const admin = adminClient(env);
   const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user) throw new HttpError('unauthorized', 'session is no longer valid');
+  if (error || !data?.user || data.user.id !== payload.sub) {
+    throw new HttpError('unauthorized', 'session is no longer valid');
+  }
 
   const user = data.user;
   const metadataProvider = (user.app_metadata?.provider as string | undefined) ?? undefined;

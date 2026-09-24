@@ -29,11 +29,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: migrations behave (59 assertions)
+      - name: migrations behave (including access and media policies)
         run: npm run test:sql
       - name: seed.sql applies and its fixtures are consistent
         run: npm run test:seed
-      - name: bridge logic (87 assertions)
+      - name: bridge logic (102 assertions)
         run: npm run test:bridge
       - name: edge functions typecheck against Deno's lib surface
         run: npm run typecheck:functions
@@ -50,6 +50,11 @@ jobs:
         with:
           channel: stable
           flutter-version: 3.24.5   # matches the pubspec constraint; bump together with it
+      # Native scaffolding is generated from the app's declared project name until
+      # it can be checked in. The tracked web/ directory is built directly.
+      - name: generate native projects for build verification
+        working-directory: apps/mobile_app
+        run: flutter create --platforms=android,ios --org com.messengerx --project-name messengerx_app .
       - name: pub get
         working-directory: apps/mobile_app
         run: flutter pub get
@@ -62,6 +67,21 @@ jobs:
       - name: unit + widget tests
         working-directory: apps/mobile_app
         run: flutter test
+      - name: compile installable web site
+        working-directory: apps/mobile_app
+        run: >-
+          flutter build web --release
+          --dart-define=SUPABASE_URL=https://example.supabase.co
+          --dart-define=SUPABASE_ANON_KEY=ci-placeholder-not-a-live-project
+      - name: save generated native projects for review
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-scaffold-review
+          path: |
+            apps/mobile_app/android
+            apps/mobile_app/ios
+          retention-days: 1
 
   # Builds (never pushes) the worker image so a Dockerfile or TDLib pin that stopped
   # compiling is caught before someone deploys it.
@@ -75,7 +95,8 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
-          context: services/telegram_bridge
+          context: .
+          file: services/telegram_bridge/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max

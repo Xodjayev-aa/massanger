@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -100,7 +99,7 @@ class ComposerState extends State<Composer> {
         context: context,
         builder: (dialogContext) => _CaptionDialog(fileName: picked.name),
       );
-      widget.bloc.add(ChatImageSent(File(picked.path), caption: caption));
+      widget.bloc.add(ChatImageSent(picked, caption: caption));
     } on AppException catch (error) {
       _show(error.message);
     } catch (error) {

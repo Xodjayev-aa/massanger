@@ -88,7 +88,7 @@ class ChatsBloc extends Bloc<ChatsEvent, ChatsState> {
   ChatsBloc(this._chats, {required AuthBloc auth}) : super(const ChatsState()) {
     _auth = auth;
     on<ChatsOpened>(_onOpened);
-    on<ChatsRefreshRequested>((_, emit) => _load(emit));
+    on<ChatsRefreshRequested>((_, emit) => _load(emit, silent: true));
     on<ChatsQueryChanged>((event, emit) => emit(state.copyWith(query: event.query)));
     on<ChatsUnreadCleared>(_onUnreadCleared);
 
@@ -157,23 +157,23 @@ class ChatsBloc extends Bloc<ChatsEvent, ChatsState> {
     // Five incoming messages are one list reload, not five.
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 450), () {
-      if (_started) unawaited(_load(null, silent: true));
+      if (_started && !isClosed) add(const ChatsRefreshRequested());
     });
   }
 
-  Future<void> _load(Emitter<ChatsState>? emit, {bool silent = false}) async {
+  Future<void> _load(Emitter<ChatsState> emit, {bool silent = false}) async {
     final userId = _auth.state.userId;
     if (userId == null) {
-      emit?.call(state.copyWith(status: ChatsStatus.failure, error: const AppException('auth', 'Sign in first.')));
+      emit(state.copyWith(status: ChatsStatus.failure, error: const AppException('auth', 'Sign in first.')));
       return;
     }
-    if (!silent) emit?.call(state.copyWith(status: ChatsStatus.loading, error: null));
+    if (!silent) emit(state.copyWith(status: ChatsStatus.loading, error: null));
     try {
       final results = await Future.wait<Object>(<Future<Object>>[
         _chats.summaries(),
         _chats.unreadTotal(),
       ]);
-      emit?.call(
+      emit(
         state.copyWith(
           status: ChatsStatus.ready,
           chats: results[0] as List<ChatSummary>,
@@ -182,7 +182,7 @@ class ChatsBloc extends Bloc<ChatsEvent, ChatsState> {
         ),
       );
     } catch (error) {
-      emit?.call(state.copyWith(status: ChatsStatus.failure, error: error));
+      emit(state.copyWith(status: ChatsStatus.failure, error: error));
     }
   }
 

@@ -6,13 +6,11 @@ import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
 import '../../data/account_repository.dart';
 import '../../data/models.dart';
-import '../../data/telegram_repository.dart';
 
 /// Where the app is, from the point of view of navigation.
 ///
-/// `verificationRequired` and `blocked` are separate because the UI and the retry
-/// policy differ: a pending check offers "check again", a restricted account offers
-/// an appeal path and must not keep hammering Google.
+/// `verificationRequired` is a legacy server state, not a Google-age check.
+/// Only the server can move an account to active (or ban it).
 enum AppStatus { unknown, signedOut, verificationRequired, blocked, ready }
 
 class AuthEvent {
@@ -34,14 +32,6 @@ class AuthProfileRefreshRequested extends AuthEvent {
   const AuthProfileRefreshRequested();
 }
 
-class AuthEligibilityRequested extends AuthEvent {
-  const AuthEligibilityRequested({this.force = false});
-
-  /// `true` only from the button on the gate screen — the server rate-limits
-  /// rechecks per user, so nothing else in the app forces one.
-  final bool force;
-}
-
 class AuthSignOutRequested extends AuthEvent {
   const AuthSignOutRequested();
 }
@@ -50,7 +40,6 @@ class AuthUiState extends Equatable {
   const AuthUiState({
     this.status = AppStatus.unknown,
     this.profile,
-    this.eligibility,
     this.error,
     this.busy = false,
     this.userId,
@@ -58,7 +47,6 @@ class AuthUiState extends Equatable {
 
   final AppStatus status;
   final AccountProfile? profile;
-  final EligibilityResult? eligibility;
   final Object? error;
   final bool busy;
   final String? userId;
@@ -77,7 +65,6 @@ class AuthUiState extends Equatable {
   AuthUiState copyWith({
     AppStatus? status,
     AccountProfile? profile,
-    EligibilityResult? eligibility,
     bool? busy,
     String? userId,
     Object? error = _keep,
@@ -85,7 +72,6 @@ class AuthUiState extends Equatable {
       AuthUiState(
         status: status ?? this.status,
         profile: profile ?? this.profile,
-        eligibility: eligibility ?? this.eligibility,
         // `error` defaults to a sentinel so omitting it preserves the current
         // error, while `error: null` clears it. A plain null-default could not
         // express "clear the error".
@@ -97,15 +83,14 @@ class AuthUiState extends Equatable {
   static const Object _keep = Object();
 
   @override
-  List<Object?> get props => <Object?>[status, profile, eligibility, error, busy, userId];
+  List<Object?> get props => <Object?>[status, profile, error, busy, userId];
 }
 
 class AuthBloc extends Bloc<AuthEvent, AuthUiState> {
-  AuthBloc(this._accounts, this._telegram) : super(const AuthUiState()) {
+  AuthBloc(this._accounts) : super(const AuthUiState()) {
     on<AuthStarted>(_onStarted);
     on<AuthSessionChanged>(_onSessionChanged);
     on<AuthProfileRefreshRequested>(_onProfileRefresh);
-    on<AuthEligibilityRequested>(_onEligibility);
     on<AuthSignOutRequested>(_onSignOut);
 
     // One listener for the whole app: sign-in, token refresh, an expired session and
@@ -119,7 +104,6 @@ class AuthBloc extends Bloc<AuthEvent, AuthUiState> {
   }
 
   final AccountRepository _accounts;
-  final TelegramRepository _telegram;
   StreamSubscription<sb.AuthState>? _subscription;
   DateTime? _lastPresencePing;
 
@@ -165,7 +149,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthUiState> {
   Future<void> _onProfileRefresh(AuthProfileRefreshRequested event, Emitter<AuthUiState> emit) => _bootstrap(emit);
 
   /// Profile → gate decision. The profile row is authoritative for whether this
-  /// account may use MessengerX; the eligibility result only explains the state.
+  /// account may use MessengerX; the UI cannot grant its own access.
   Future<void> _bootstrap(Emitter<AuthUiState> emit) async {
     final userId = _accounts.currentUserId;
     if (userId == null) {
@@ -185,19 +169,16 @@ class AuthBloc extends Bloc<AuthEvent, AuthUiState> {
           status: AppStatus.blocked,
           profile: profile,
           userId: userId,
-          eligibility: await _accounts.eligibility(),
           busy: false,
         ));
         return;
       }
-      // pending_verification: try to clear it now. If Google already answered for
-      // this account the function short-circuits off the cached verdict, so the cost
-      // is one request, not a consent round trip.
-      final eligibility = await _accounts.checkEligibility();
+      // A pending legacy/moderation state cannot be cleared by a client-side
+      // Google token. Offer a refresh; migration 00013 activates old age-gated
+      // accounts and leaves manually restricted/banned users alone.
       emit(AuthUiState(
-        status: eligibility.passed ? AppStatus.ready : AppStatus.verificationRequired,
+        status: AppStatus.verificationRequired,
         profile: profile,
-        eligibility: eligibility,
         userId: userId,
         busy: false,
       ));
@@ -208,46 +189,20 @@ class AuthBloc extends Bloc<AuthEvent, AuthUiState> {
     }
   }
 
-  Future<void> _onEligibility(AuthEligibilityRequested event, Emitter<AuthUiState> emit) async {
-    emit(state.copyWith(busy: true, error: null));
-    try {
-      final eligibility = await _accounts.checkEligibility(recheck: event.force);
-      final profile = await _accounts.profile();
-      emit(AuthUiState(
-        status: profile.accessState == 'active'
-            ? AppStatus.ready
-            : (profile.isBlocked ? AppStatus.blocked : AppStatus.verificationRequired),
-        profile: profile,
-        eligibility: eligibility,
-        userId: state.userId,
-      ));
-    } catch (error) {
-      emit(state.copyWith(error: error));
-    } finally {
-      emit(state.copyWith(busy: false));
-    }
-  }
-
   Future<void> _onSignOut(AuthSignOutRequested event, Emitter<AuthUiState> emit) async {
-    try {
-      // Unlinking Telegram first means a later install on another device cannot
-      // resume a bridge session that its owner just ended.
-      final status = await _telegram.status();
-      if (status.isLinked) await _telegram.unlink();
-    } catch (_) {
-      // A failed unlink must never block a sign-out — the bridge lease expires on
-      // its own, and the user's intent (end this session) still wins.
-    }
+    // Sign-out is local to this device. Unlinking Telegram here would revoke
+    // the TDLib session for every device, violating cross-device sign-in.
+    // The explicit "Unlink" control on the Telegram page does that instead.
     try {
       await _accounts.signOut();
     } catch (error) {
       emit(state.copyWith(error: error));
+      return;
     }
     emit(AuthUiState(status: AppStatus.signedOut));
   }
 
-  /// The sign-in path itself lives here so the page owns no repository: the bloc
-  /// is the only place that knows what a failed OAuth should mean for the session.
+  /// The bloc keeps sign-in errors out of the router and in the sign-in UI.
   Future<void> signInWithGoogle() => _accounts.signInWithGoogle();
 
   /// `heartbeat()` writes `profiles.last_seen_at`, from which `directory.is_online`

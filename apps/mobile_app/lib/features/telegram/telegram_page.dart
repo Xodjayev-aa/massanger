@@ -12,8 +12,8 @@ import '../chats/widgets.dart';
 import 'telegram_cubit.dart';
 
 /// Telegram panel: connection state, what the bridge is allowed to do, and the
-/// per-chat switches. Everything here maps to a definer RPC that also enforces the
-/// age gate, so the panel can never grant itself more than the account has.
+/// per-chat switches. Everything here maps to a definer RPC that enforces
+/// account access, so the panel cannot grant itself more than the server allows.
 class TelegramPage extends StatelessWidget {
   const TelegramPage({super.key});
 
@@ -60,6 +60,30 @@ class _TelegramView extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 32),
                 children: <Widget>[
                   _ConnectionCard(account: account, busy: state.busy),
+                  const _SectionTitle('Notifications'),
+                  _PreferenceRow(
+                    title: 'Offline alerts in Telegram',
+                    subtitle: 'When you are away, send folded notices to your own Saved Messages. Link Telegram to enable.',
+                    value: state.pushPreferences?.telegram ?? false,
+                    onChanged: account.isLinked && !state.busy && state.pushPreferences != null
+                        ? (value) => context.read<TelegramCubit>().setPushPreferences(telegram: value)
+                        : null,
+                  ),
+                  _PreferenceRow(
+                    title: 'Show message previews',
+                    subtitle: 'Also controls in-app banners. Off hides sender and text; banners still appear while the app is open.',
+                    value: state.pushPreferences?.preview ?? false,
+                    onChanged: !state.busy && state.pushPreferences != null
+                        ? (value) => context.read<TelegramCubit>().setPushPreferences(preview: value)
+                        : null,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+                    child: Text(
+                      'No APNs or FCM: Telegram handles offline delivery. No alert is sent for a muted or read chat, or for a message your Telegram already received.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
                   const SizedBox(height: 8),
                   if (account.isLinked || account.mirroredChats > 0) ...<Widget>[
                     const _SectionTitle('What the bridge may do'),
@@ -221,7 +245,7 @@ class _PreferenceRow extends StatelessWidget {
   final String title;
   final String subtitle;
   final bool value;
-  final ValueChanged<bool> onChanged;
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -243,7 +267,7 @@ class _DirectionPicker extends StatelessWidget {
 
   static const Map<String, String> _labels = <String, String>{
     'both': 'Two-way',
-    'to_app': 'Telegram → app',
+    'from_telegram': 'Telegram → app',
     'to_telegram': 'App → Telegram',
     'off': 'Off',
   };
@@ -273,6 +297,7 @@ class _MirrorRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return ListTile(
+      onTap: chat.chatId == null ? null : () => context.push(Routes.chat(chat.chatId!)),
       leading: PersonAvatar(name: chat.title, size: 36),
       title: Text(chat.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
@@ -295,7 +320,7 @@ class _MirrorRow extends StatelessWidget {
         },
         itemBuilder: (context) => const <PopupMenuEntry<String>>[
           PopupMenuItem<String>(value: 'both', child: Text('Two-way')),
-          PopupMenuItem<String>(value: 'to_app', child: Text('Telegram → app only')),
+          PopupMenuItem<String>(value: 'from_telegram', child: Text('Telegram → app only')),
           PopupMenuItem<String>(value: 'to_telegram', child: Text('App → Telegram only')),
           PopupMenuItem<String>(value: 'off', child: Text('Off for this chat')),
         ],

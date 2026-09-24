@@ -34,7 +34,6 @@ import { requireUser, rpc, userClient } from '../_shared/supabase.ts';
 import { aesKeyFromSecret, seal } from '../_shared/crypto.ts';
 import { enforce } from '../_shared/rate-limit.ts';
 import { wakeBridge } from '../_shared/bridge.ts';
-import { dropCredential } from '../_shared/credentials.ts';
 import { HttpError, type LinkEnvelopePayload, type SyncDirection } from '../_shared/types.ts';
 
 const FUNCTION_NAME = 'telegram-link';
@@ -152,9 +151,8 @@ async function handle(request: Request): Promise<Response> {
       case 'unlink': {
         const result = await rpc<{ request_id: string }>(asUser, 'telegram_unlink', {});
         await wakeBridge(env, { kind: 'relink', user_ids: [caller.uid], ids: [result.request_id] });
-        // Disconnecting Telegram also forgets any Google consent we hold: the
-        // user asked us to stop touching their accounts.
-        await dropCredential(env, caller.uid);
+        // Telegram unlink revokes the worker's TDLib session. MessengerX no
+        // longer stores Gmail or Drive consent as part of sign-in.
         return ok({ unlink_requested: true, request_id: result.request_id }, cors);
       }
 

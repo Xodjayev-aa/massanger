@@ -90,6 +90,19 @@ describe('loadConfig', () => {
     assert.equal(simulated.transport, 'memory');
   });
 
+  it('rejects an unsupported stateless login-token export rather than pretending failover works', () => {
+    assert.throws(() => loadConfig(testEnv({ TELEGRAM_EXPORT_LOGIN_TOKEN: 'true' })),
+      (error: unknown) => error instanceof ConfigError && /TELEGRAM_EXPORT_LOGIN_TOKEN.*persistent/.test(error.message));
+  });
+
+  it('accepts a 32-byte base64 TDLib key, not hex or malformed bytes', () => {
+    const key = Buffer.alloc(32, 0x17).toString('base64');
+    assert.equal(loadConfig(testEnv({ TDLIB_DB_KEY: key })).databaseEncryptionKey, key);
+    assert.throws(() => loadConfig(testEnv({ TDLIB_DB_KEY: 'ab'.repeat(32) })),
+      (error: unknown) => error instanceof ConfigError && /TDLIB_DB_KEY/.test(error.message));
+    assert.throws(() => loadConfig(testEnv({ TDLIB_DB_KEY: 'not-base64' })), ConfigError);
+  });
+
   it('parses ALLOWED_ORIGINS into a list', () => {
     const config = loadConfig(testEnv({ ALLOWED_ORIGINS: 'https://a.example, https://b.example ,' }));
     assert.deepEqual(config.allowedOrigins, ['https://a.example', 'https://b.example']);

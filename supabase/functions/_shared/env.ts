@@ -13,21 +13,11 @@ export type Env = Readonly<{
   anonKey: string;
   jwtSecret: string | null;
 
-  /** Age gate */
-  googleClientId: string | null;
-  googleClientIds: string[];
-  googleClientSecret: string | null;
-  minAccountAgeDays: number;
-  maxEligibilityAttempts: number;
-  eligibilityCacheDays: number;
-  blockTooYoung: 'restrict' | 'delete';
-
   /** Bridge ⇄ edge trust */
   bridgeHmacSecret: string | null;
   bridgeToken: string | null;
   bridgeBaseUrl: string | null;
-  /** AES-256-GCM key shared with the bridge: seals Telegram login codes and
-   *  wraps stored Google refresh tokens at rest. */
+  /** AES-256-GCM key shared with the bridge: seals Telegram login codes. */
   sealKey: string | null;
 
   /** Misc */
@@ -68,26 +58,11 @@ const list = (name: string, fallback: string[] = []): string[] => {
 
 export function readEnv(): Env {
   const environment = (str('MESSENGERX_ENV', 'production') ?? 'production') as Env['environment'];
-  const primary = str('GOOGLE_CLIENT_ID');
   return {
     supabaseUrl: (str('SUPABASE_URL') ?? 'http://host.docker.internal:54321').replace(/\/+$/, ''),
     serviceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
     anonKey: required('SUPABASE_ANON_KEY'),
     jwtSecret: str('SUPABASE_JWT_SECRET'),
-
-    googleClientId: primary,
-    googleClientIds: [
-      ...primary ? [primary] : [],
-      ...list('GOOGLE_CLIENT_IDS'),
-      ...str('GOOGLE_IOS_CLIENT_ID') ? [str('GOOGLE_IOS_CLIENT_ID')!] : [],
-      ...str('GOOGLE_ANDROID_CLIENT_ID') ? [str('GOOGLE_ANDROID_CLIENT_ID')!] : [],
-      ...str('GOOGLE_WEB_CLIENT_ID') ? [str('GOOGLE_WEB_CLIENT_ID')!] : [],
-    ],
-    googleClientSecret: str('GOOGLE_CLIENT_SECRET'),
-    minAccountAgeDays: int('MIN_ACCOUNT_AGE_DAYS', 366),
-    maxEligibilityAttempts: int('MAX_ELIGIBILITY_ATTEMPTS', 5),
-    eligibilityCacheDays: int('ELIGIBILITY_CACHE_DAYS', 30),
-    blockTooYoung: (str('AGE_GATE_ON_FAILURE', 'restrict') ?? 'restrict') as 'restrict' | 'delete',
 
     bridgeHmacSecret: str('BRIDGE_HMAC_SECRET'),
     bridgeToken: str('BRIDGE_TOKEN'),

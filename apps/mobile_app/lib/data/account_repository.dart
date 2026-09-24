@@ -1,19 +1,13 @@
-import 'dart:async';
-import 'dart:io';
-
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/errors.dart';
 import '../core/formatting.dart';
 import 'models.dart';
 
-/// Sign-in, the own-profile row, the age gate, and the presence heartbeat.
-///
-/// The age gate is the one security-critical call the app makes: it is *not*
-/// trusted from the client. `profiles.access_state` is what the database and the
-/// bridge consult, and only the edge function may flip it — so a tampered client
-/// can delay its own check at worst, never skip it.
+/// Supabase Auth, own profile and presence. Access state is server-managed by
+/// RLS and moderation; it is not inferred from Gmail or Drive content.
 class AccountRepository {
   AccountRepository(this._client);
 
@@ -31,28 +25,16 @@ class AccountRepository {
     return uid;
   }
 
-  /// Google is the only identity provider, because the age rule is defined on a
-  /// Google account. `signInWithOAuth` returns once the redirect completes; the
-  /// provider token rides along in the session for the eligibility check below.
-  /// Deep-link callback registered in `supabase/config.toml` (local) and in
-  /// Supabase → Auth → URL Configuration (hosted), and mirrored by the intent filter
-  /// / `CFBundleURLTypes` entry the app's README asks for. Without it the browser
-  /// completes the flow somewhere the app never hears about.
+  /// Basic Google OAuth scopes only (openid, email, profile). On the web
+  /// Supabase redirects back to the configured public site URL; native builds
+  /// use the callback registered in Android/iOS and the Auth redirect allowlist.
   static const String _nativeCallback = 'com.messengerx.app://login-callback';
 
   Future<void> signInWithGoogle() async {
     try {
-      // `access_type=offline` + `prompt=consent` makes Google return a refresh
-      // token, which the server stores so the age check can be re-run later
-      // without asking the user to sign in again.
       await _client.auth.signInWithOAuth(
         OAuthProvider.google,
-        // On the web the server's own redirect wins, so no callback is passed.
         redirectTo: kIsWeb ? null : _nativeCallback,
-        queryParams: <String, String>{
-          'access_type': 'offline',
-          'prompt': 'consent',
-        },
       );
     } on AuthException catch (error, stack) {
       throw AppException.wrap(error, stack);
@@ -75,8 +57,7 @@ class AccountRepository {
           .select(
             'id, username, display_name, avatar_path, avatar_external_url, bio, phone_e164, '
             'telegram_username, access_state, access_state_reason, google_email, '
-            'google_account_created_at, google_account_age_days, eligibility_verified_at, '
-            'eligibility_method, eligibility_attempts, last_seen_at',
+            'last_seen_at',
           )
           .eq('id', uid)
           .maybeSingle();
@@ -104,7 +85,7 @@ class AccountRepository {
   }
 
   /// `update_profile` is a definer function on purpose: `guard_profile_update`
-  /// refuses client writes to the eligibility columns, so the editable fields go
+  /// refuses client writes to server-managed columns, so the editable fields go
   /// through an RPC that only forwards the safe ones.
   /// [clearAvatar] is the only supported way to remove a picture: `p_avatar_path: ''`
   /// is refused by the storage-prefix guard server-side, so an empty string would be a
@@ -135,13 +116,14 @@ class AccountRepository {
   /// Replaces the avatar: upload first, then point the profile at the new object.
   /// The old object is removed only after the row is updated, so a failed upload
   /// can never leave the profile pointing at a deleted file.
-  Future<String> uploadAvatar(File file) async {
+  Future<String> uploadAvatar(XFile file) async {
     final uid = currentUserIdOrThrow;
     final size = await file.length();
     if (size > 5 * 1024 * 1024) throw const AppException('storage', 'Avatars must stay under 5 MB.');
     final path = '$uid/avatar-${DateTime.now().millisecondsSinceEpoch}.jpg';
     try {
-      await _client.storage.from('avatars').upload(path, file, fileOptions: const FileOptions(contentType: 'image/jpeg'));
+      await _client.storage.from('avatars').uploadBinary(
+        path, await file.readAsBytes(), fileOptions: const FileOptions(contentType: 'image/jpeg'));
       return path;
     } catch (error, stack) {
       throw AppException.wrap(error, stack);
@@ -157,48 +139,6 @@ class AccountRepository {
     }
   }
 
-  /// Runs the Google account-age check. [providerToken] is `session.providerToken`
-  /// right after the OAuth redirect; without it the function falls back to the
-  /// credentials it stored earlier, and if there are none it tells the user to
-  /// re-consent rather than guessing.
-  Future<EligibilityResult> checkEligibility({bool recheck = false}) async {
-    final session = _client.auth.currentSession;
-    if (session == null) throw const AppException('auth', 'Sign in first.');
-    try {
-      final response = await _client.functions
-          .invoke(
-            'account-age-gate',
-            body: <String, Object?>{
-              'requestId': '${DateTime.now().microsecondsSinceEpoch}',
-              if (session.providerToken != null) 'providerToken': session.providerToken,
-              'accessToken': session.accessToken,
-              'recheck': recheck,
-            },
-          )
-          .timeout(const Duration(seconds: 20));
-      final envelope = response.data;
-      final data = envelope is Map ? envelope['data'] : null;
-      if (data is! Map) {
-        throw const AppException('function', 'The age check returned no result.');
-      }
-      return EligibilityResult.fromMap(Map<String, dynamic>.from(data));
-    } on TimeoutException {
-      throw const AppException('timeout', 'Google did not answer in time. Try again in a moment.');
-    } catch (error, stack) {
-      throw AppException.wrap(error, stack);
-    }
-  }
-
-  Future<EligibilityResult?> eligibility() async {
-    try {
-      final raw = await _client.rpc<dynamic>('eligibility_status');
-      if (raw is! Map) return null;
-      return EligibilityResult.fromMap(Map<String, dynamic>.from(raw));
-    } catch (_) {
-      return null;
-    }
-  }
-
   /// Bumps `last_seen_at`, which `directory.is_online` derives from. Called on
   /// resume and on a timer; deliberately not in the background, where a wake would
   /// make every contact look online at 3 a.m.
@@ -209,59 +149,4 @@ class AccountRepository {
       // Presence is advisory.
     }
   }
-}
-
-/// The `account-age-gate` reply, plus `eligibility_status()`'s cached shape.
-class EligibilityResult {
-  const EligibilityResult({
-    required this.passed,
-    required this.accessState,
-    required this.reason,
-    this.method,
-    this.accountCreatedAt,
-    this.accountAgeDays,
-    this.minAgeDays = 366,
-    this.checkedAt,
-    this.attempts,
-    this.sealingEnabled = true,
-  });
-
-  final bool passed;
-  final String accessState;
-  final String reason;
-  final String? method;
-  final DateTime? accountCreatedAt;
-  final int? accountAgeDays;
-  final int minAgeDays;
-  final DateTime? checkedAt;
-  final int? attempts;
-  final bool sealingEnabled;
-
-  bool get isBlocked => accessState == 'restricted' || accessState == 'banned';
-
-  bool get needsRecheck => accessState == 'pending_verification';
-
-  /// Copy for the gate screen. The server phrased `reason`, so the app adds only
-  /// what it knows locally (how many tries are left, when to come back).
-  String get headline {
-    if (passed) return 'Account verified';
-    if (accountAgeDays != null) {
-      return 'Your Google account is $accountAgeDays day${accountAgeDays == 1 ? '' : 's'} old. '
-          'MessengerX needs at least $minAgeDays days.';
-    }
-    return reason.isEmpty ? 'We could not confirm your account age yet.' : reason;
-  }
-
-  factory EligibilityResult.fromMap(Map<String, dynamic> map) => EligibilityResult(
-        passed: map['passed'] == true || map['verdict'] == 'passed',
-        accessState: asString(map['access_state'], fallback: 'pending_verification'),
-        reason: asString(map['reason']),
-        method: map['method'] as String?,
-        accountCreatedAt: parseTimestamp(map['account_created_at']),
-        accountAgeDays: map['account_age_days'] == null ? null : asInt(map['account_age_days']),
-        minAgeDays: asInt(map['min_age_days'], 366),
-        checkedAt: parseTimestamp(map['checked_at'] ?? map['verified_at']),
-        attempts: map['attempts'] == null ? null : asInt(map['attempts']),
-        sealingEnabled: map['sealing'] != false,
-      );
 }

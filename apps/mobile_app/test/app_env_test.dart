@@ -44,12 +44,10 @@ void main() {
         supabaseAnonKey: 'x',
         functionBaseUrl: 'https://functions.internal.test',
       );
-      expect(split.functionsPath('account-age-gate').toString(), 'https://functions.internal.test/functions/v1/account-age-gate');
+      expect(split.functionsPath('telegram-send').toString(), 'https://functions.internal.test/functions/v1/telegram-send');
       expect(configured.functionsPath('telegram-link').toString(), 'https://abcdef12345.supabase.co/functions/v1/telegram-link');
     });
 
-    test('the age shown in the gate copy defaults to the server default', () {
-      expect(configured.minAccountAgeDays, 366);
-    });
+  });
   });
 }

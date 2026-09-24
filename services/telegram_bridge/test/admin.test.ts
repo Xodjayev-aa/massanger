@@ -195,6 +195,22 @@ describe('admin server', () => {
       assert.match(String(claim.p_lease), /seconds$/);
     });
 
+    it('accepts a notice wake and claims the recipient’s queue, not the outbox', async () => {
+      const outboxBefore = harness.rec.calls.filter((call) => call.url.includes('bridge_claim_outbox')).length;
+      const raw = JSON.stringify({ kind: 'notify', user_ids: [OWNER] });
+      const { header } = buildSignatureHeader(harness.config.bridgeHmacSecret ?? '', raw);
+      const result = await wake(harness, raw, {
+        authorization: `Bearer ${harness.config.bridgeToken}`,
+        'x-bridge-signature': header,
+      });
+      assert.equal(result.status, 202);
+      assert.equal(result.json.kind, 'notify');
+      const claim = await until(() => harness.rec.find('bridge_claim_notify'));
+      assert.equal(claim.json().p_owner, OWNER);
+      assert.equal(harness.rec.calls.filter((call) => call.url.includes('bridge_claim_outbox')).length,
+        outboxBefore, 'no unrelated app send is claimed');
+    });
+
     it('drops malformed user ids instead of failing the call', async () => {
       const raw = JSON.stringify({ kind: 'link', user_ids: ['DROP TABLE', OWNER, 42] });
       const { header } = buildSignatureHeader(harness.config.bridgeHmacSecret ?? '', raw);

@@ -9,7 +9,6 @@ class AppEnv {
     required this.supabaseUrl,
     required this.supabaseAnonKey,
     this.functionBaseUrl,
-    this.minAccountAgeDays = 366,
     this.enableRealtime = true,
   });
 
@@ -19,10 +18,6 @@ class AppEnv {
   /// Set only when functions are deployed to a different host than [supabaseUrl]
   /// (a dedicated edge runtime or a CDN in front of `/functions/v1`).
   final String? functionBaseUrl;
-
-  /// Mirrors the server's MIN_ACCOUNT_AGE_DAYS. Purely for copy: the gate itself
-  /// is authoritative, and a mismatch only makes the message less precise.
-  final int minAccountAgeDays;
 
   /// Killed for debugging push storms; the app then polls on focus instead.
   final bool enableRealtime;
@@ -37,7 +32,6 @@ class AppEnv {
     supabaseUrl: String.fromEnvironment('SUPABASE_URL', defaultValue: _undef),
     supabaseAnonKey: String.fromEnvironment('SUPABASE_ANON_KEY'),
     functionBaseUrl: String.fromEnvironment('FUNCTION_BASE_URL'),
-    minAccountAgeDays: int.fromEnvironment('MIN_ACCOUNT_AGE_DAYS', defaultValue: 366),
     enableRealtime: bool.fromEnvironment('DISABLE_REALTIME') == false,
   );
 

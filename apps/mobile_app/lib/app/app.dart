@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show SupabaseClient;
 
 import '../data/account_repository.dart';
 import '../data/chat_repository.dart';
@@ -10,13 +11,14 @@ import '../data/telegram_repository.dart';
 import '../features/auth/auth_bloc.dart';
 import '../features/chats/chats_bloc.dart';
 import 'di.dart';
+import 'incoming_notices.dart';
 import 'router.dart';
 import 'theme.dart';
 
 /// The widget the entry point runs.
 ///
 /// Two blocs live above the router on purpose: [AuthBloc] owns the session and the
-/// eligibility gate (the router's `redirect` listens to it), and [ChatsBloc] owns
+/// access state (the router's `redirect` listens to it), and [ChatsBloc] owns
 /// the feed so the unread badge and the last-message previews survive opening a
 /// thread. Every other bloc is scoped to the screen that needs it.
 class MessengerXApp extends StatefulWidget {
@@ -44,7 +46,7 @@ class _MessengerXAppState extends State<MessengerXApp> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _auth = AuthBloc(sl<AccountRepository>(), sl<TelegramRepository>())..add(const AuthStarted());
+    _auth = AuthBloc(sl<AccountRepository>())..add(const AuthStarted());
     _chats = ChatsBloc(sl<ChatRepository>(), auth: _auth);
     _router = buildRouter(_auth, _routerTick);
     _routerTickSub = _auth.stream.listen((_) => _routerTick.value++);
@@ -106,10 +108,16 @@ class _MessengerXAppState extends State<MessengerXApp> with WidgetsBindingObserv
             darkTheme: AppTheme.dark(),
             themeMode: ThemeMode.system,
             routerConfig: _router,
-            builder: (context, child) => _coldStartCover(
-              context,
-              child,
-              covered: state.status == AppStatus.unknown,
+            builder: (context, child) => IncomingNotices(
+              auth: _auth,
+              chats: _chats,
+              telegram: sl<TelegramRepository>(),
+              client: sl<SupabaseClient>(),
+              child: _coldStartCover(
+                context,
+                child,
+                covered: state.status == AppStatus.unknown,
+              ),
             ),
           );
         },

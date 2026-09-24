@@ -1,4 +1,3 @@
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -14,10 +13,7 @@ import '../auth/auth_bloc.dart';
 import '../chats/widgets.dart';
 import 'profile_cubit.dart';
 
-/// The account screen: identity, what Google told us, and the exit.
-///
-/// The Google age fields are shown read-only on purpose. They are written by the
-/// gate and a user-editable copy of them would be the first hole in the rule.
+/// Identity, server-managed access state, and the local sign-out control.
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
 
@@ -82,18 +78,10 @@ class _ProfileView extends StatelessWidget {
                 const SizedBox(height: 16),
                 _IdentityEditor(profile: profile, saving: state.saving),
                 const Divider(height: 32),
-                const _SectionHeader('Account age'),
+                const _SectionHeader('Account'),
                 _InfoRow(label: 'Access state', value: profile.accessState.replaceAll('_', ' ')),
-                _InfoRow(
-                  label: 'Google account age',
-                  value: profile.googleAccountAgeDays == null ? 'not recorded' : '${profile.googleAccountAgeDays} days',
-                ),
-                _InfoRow(label: 'Verified by', value: profile.eligibilityMethod ?? '—'),
-                _InfoRow(label: 'Attempts', value: '${profile.eligibilityAttempts}'),
                 if (profile.accessStateReason != null) _InfoRow(label: 'Note', value: profile.accessStateReason!),
-                const Divider(height: 32),
-                const _SectionHeader('Google'),
-                _InfoRow(label: 'Signed in as', value: profile.googleEmail ?? 'not linked'),
+                _InfoRow(label: 'Sign-in identity', value: profile.googleEmail ?? profile.phoneE164 ?? 'not linked'),
                 const SizedBox(height: 16),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -104,8 +92,8 @@ class _ProfileView extends StatelessWidget {
                         builder: (dialogContext) => AlertDialog(
                           title: const Text('Sign out?'),
                           content: const Text(
-                            'If Telegram is linked, MessengerX unlinks it too so the bridge stops reading your chats. '
-                            'Your messages stay on the server.',
+                            'This signs out on this device only. Your MessengerX messages and linked Telegram session remain available on your other devices. '
+                            'To stop Telegram syncing everywhere, use Unlink in the Telegram panel.',
                           ),
                           actions: <Widget>[
                             TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),
@@ -156,7 +144,7 @@ class _IdentityEditorState extends State<_IdentityEditor> {
       final cubit = context.read<ProfileCubit>();
       final picked = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 640, maxHeight: 640, imageQuality: 85);
       if (picked == null) return;
-      await cubit.saveAvatar(File(picked.path), previousPath: widget.profile.avatarPath);
+      await cubit.saveAvatar(picked, previousPath: widget.profile.avatarPath);
       if (!mounted) return;
       context.read<AuthBloc>().add(const AuthProfileRefreshRequested());
     } on AppException catch (error) {

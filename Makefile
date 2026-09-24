@@ -32,7 +32,7 @@ help:
 		'check       everything CI checks: tests, typechecks, analyze, format' \
 		'fmt         prettier + dart format' \
 		'deploy      supabase db push + function deploy (reads env from supabase/.env)' \
-		'docker-up   docker compose up for the bridge + TDLib sidecar (infra/)' \
+		'docker-up   docker compose up for the bridge with TDLib in-process (infra/)' \
 		''
 
 # ── setup ────────────────────────────────────────────────────────────────────

@@ -1,7 +1,8 @@
 import 'dart:async';
-import 'dart:io';
-
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'platform_network_errors_stub.dart'
+    if (dart.library.io) 'platform_network_errors_io.dart' as platform_network;
 
 /// A user-presentable failure.
 ///
@@ -55,7 +56,7 @@ class AppException implements Exception {
     if (error is TimeoutException) {
       return const AppException('timeout', 'The server took too long to answer. Try again.');
     }
-    if (error is SocketException || error is HttpException) {
+    if (platform_network.isPlatformNetworkError(error)) {
       return const AppException('network', 'No connection to MessengerX. Check the network and retry.');
     }
     return AppException('unknown', '$error', cause: error);
