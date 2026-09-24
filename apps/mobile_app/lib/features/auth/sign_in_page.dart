@@ -6,9 +6,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/errors.dart';
 import 'auth_bloc.dart';
 
-/// Google sign-in for MessengerX. Telegram phone + code is a separate TDLib
-/// linking step after sign-in; standalone Telegram identity sign-in is not yet
-/// implemented and must not be advertised as a working option.
+/// Google or independent Telegram OIDC sign-in (when the host enables it).
+/// Neither sign-in method creates a TDLib session: connecting Telegram for
+/// conversations still requires the separate phone/code wizard after sign-in.
 class SignInPage extends StatefulWidget {
   const SignInPage({super.key});
 
@@ -20,15 +20,19 @@ class _SignInPageState extends State<SignInPage> {
   bool _busy = false;
   String? _error;
 
-  Future<void> _signIn() async {
+  Future<void> _signIn({required bool withTelegram}) async {
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      // The Supabase SDK resolves once the OAuth redirect lands back in the app;
-      // the bloc's auth listener then drives the navigation from here.
-      await context.read<AuthBloc>().signInWithGoogle();
+      // The bloc's auth listener drives navigation after the browser returns.
+      final auth = context.read<AuthBloc>();
+      if (withTelegram) {
+        await auth.signInWithTelegram();
+      } else {
+        await auth.signInWithGoogle();
+      }
     } on AppException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } finally {
@@ -39,6 +43,7 @@ class _SignInPageState extends State<SignInPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final telegramAvailable = context.read<AuthBloc>().telegramLoginEnabled;
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -57,26 +62,43 @@ class _SignInPageState extends State<SignInPage> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Sign in with Google to use MessengerX. To message people on Telegram, '
-                    'connect your own Telegram account with its phone number and login code after signing in.',
+                    telegramAvailable
+                        ? 'Choose Google or Telegram to sign in. To message people on Telegram, connect your account with its phone number and login code afterward.'
+                        : 'Sign in with Google. Telegram sign-in needs server setup; to message Telegram users, connect your account by phone and code afterward.',
                     style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 32),
                   FilledButton.icon(
-                    onPressed: _busy ? null : _signIn,
+                    onPressed: _busy ? null : () => _signIn(withTelegram: false),
                     icon: _busy
                         ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.g_mobiledata_rounded, size: 28),
-                    label: Text(_busy ? 'Opening Google…' : 'Continue with Google'),
+                    label: const Text('Continue with Google'),
                   ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _busy || !telegramAvailable ? null : () => _signIn(withTelegram: true),
+                    icon: const Icon(Icons.send_rounded),
+                    label: const Text('Continue with Telegram'),
+                  ),
+                  if (!telegramAvailable) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Telegram sign-in awaits the hosted provider setup. Google sign-in still works once configured.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ],
                   if (_error != null) ...<Widget>[
                     const SizedBox(height: 16),
                     _ErrorNote(message: _error!),
                   ],
                   const SizedBox(height: 24),
                   Text(
-                    'Google sign-in does not grant access to your Gmail or Drive. '
-                    'Telegram will send a code when you choose to connect your account.',
+                    'Google does not grant access to Gmail or Drive. Telegram sign-in opens Telegram for approval; '
+                    'it is not phone/code sign-in and does not connect your TDLib session. '
+                    'The phone/code wizard for chats comes next. The two sign-in methods create separate '
+                    'MessengerX accounts unless the identities are securely linked.',
                     style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     textAlign: TextAlign.center,
                   ),

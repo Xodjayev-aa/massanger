@@ -9,9 +9,10 @@ import 'models.dart';
 /// Supabase Auth, own profile and presence. Access state is server-managed by
 /// RLS and moderation; it is not inferred from Gmail or Drive content.
 class AccountRepository {
-  AccountRepository(this._client);
+  AccountRepository(this._client, {this.telegramLoginEnabled = false});
 
   final SupabaseClient _client;
+  final bool telegramLoginEnabled;
 
   Stream<AuthState> get authChanges => _client.auth.onAuthStateChange;
 
@@ -35,6 +36,27 @@ class AccountRepository {
       await _client.auth.signInWithOAuth(
         OAuthProvider.google,
         redirectTo: kIsWeb ? null : _nativeCallback,
+      );
+    } on AuthException catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  /// Independent Supabase identity via Telegram's OIDC approval flow. The
+  /// hosted Auth service validates Telegram's signed ID token; no bot secret or
+  /// service-role key is ever in the client. This is NOT TDLib phone/code login:
+  /// users still need to connect their own Telegram account in Settings to send
+  /// and receive Telegram conversations. Do not enable until the custom provider
+  /// and its redirect URLs have been verified on the real hosted project.
+  Future<void> signInWithTelegram() async {
+    if (!telegramLoginEnabled) {
+      throw const AppException('configuration', 'Telegram sign-in is not configured on this server yet.');
+    }
+    try {
+      await _client.auth.signInWithOAuth(
+        const OAuthProvider('custom:telegram'),
+        scopes: 'openid profile phone',
+        redirectTo: kIsWeb ? Uri.base.origin : _nativeCallback,
       );
     } on AuthException catch (error, stack) {
       throw AppException.wrap(error, stack);

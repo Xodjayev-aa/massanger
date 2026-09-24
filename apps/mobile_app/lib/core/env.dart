@@ -10,6 +10,7 @@ class AppEnv {
     required this.supabaseAnonKey,
     this.functionBaseUrl,
     this.enableRealtime = true,
+    this.telegramOidcEnabled = false,
   });
 
   final String supabaseUrl;
@@ -22,6 +23,10 @@ class AppEnv {
   /// Killed for debugging push storms; the app then polls on focus instead.
   final bool enableRealtime;
 
+  /// Only set after the hosted Supabase custom:telegram OIDC provider is enabled
+  /// and a real Telegram login has passed the hosted callback round trip.
+  final bool telegramOidcEnabled;
+
   static const String _undef = 'SUPABASE_URL_NOT_SET';
 
   /// The build the entry point uses: every value comes from `--dart-define`.
@@ -33,6 +38,7 @@ class AppEnv {
     supabaseAnonKey: String.fromEnvironment('SUPABASE_ANON_KEY'),
     functionBaseUrl: String.fromEnvironment('FUNCTION_BASE_URL'),
     enableRealtime: bool.fromEnvironment('DISABLE_REALTIME') == false,
+    telegramOidcEnabled: bool.fromEnvironment('TELEGRAM_OIDC_ENABLED'),
   );
 
   String get functionsBase {

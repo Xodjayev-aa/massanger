@@ -81,14 +81,35 @@ jobs:
             '{name:"Flutter analyzer diagnostics",head_sha:$sha,status:"completed",conclusion:"failure",output:{title:"Flutter analysis failed",summary:"Analyzer diagnostics (first 60000 characters)",text:($log[:60000])}}' \
             | gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id
       - name: unit + widget tests
+        id: test
         working-directory: apps/mobile_app
-        run: flutter test
+        run: flutter test --reporter expanded 2>&1 | tee flutter-test.log
+      - name: publish test diagnostics on failure
+        if: ${{ failure() && steps.test.outcome == 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          jq -n --arg sha "$HEAD_SHA" --rawfile log apps/mobile_app/flutter-test.log \
+            '{name:"Flutter test diagnostics",head_sha:$sha,status:"completed",conclusion:"failure",output:{title:"Flutter tests failed",summary:"Test diagnostics (last 60000 characters)",text:($log[-60000:])}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id
       - name: compile installable web site
+        id: web
         working-directory: apps/mobile_app
         run: >-
           flutter build web --release
           --dart-define=SUPABASE_URL=https://example.supabase.co
           --dart-define=SUPABASE_ANON_KEY=ci-placeholder-not-a-live-project
+          2>&1 | tee flutter-web.log
+      - name: publish web-build diagnostics on failure
+        if: ${{ failure() && steps.web.outcome == 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          jq -n --arg sha "$HEAD_SHA" --rawfile log apps/mobile_app/flutter-web.log \
+            '{name:"Flutter web diagnostics",head_sha:$sha,status:"completed",conclusion:"failure",output:{title:"Flutter web build failed",summary:"Web build diagnostics (last 60000 characters)",text:($log[-60000:])}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id
       - name: save generated native projects for review
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4

@@ -20,7 +20,9 @@ dependencies:
   equatable: ^2.0.5
 
   # Backend
-  supabase_flutter: ^2.8.0
+  # 2.12.4+ supports OAuthProvider('custom:telegram') for Supabase OIDC.
+  # Keep the upper bound below the SDK-3.9/Flutter-3.35 transition until CI is updated.
+  supabase_flutter: '>=2.12.4 <2.16.0'
 
   # Routing / wiring
   go_router: ^14.2.7

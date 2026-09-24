@@ -30,6 +30,7 @@ const U = {
   gated: '33333333-3333-3333-3333-333333333333',
   other: '44444444-4444-4444-4444-444444444444',
   link: '66666666-6666-6666-6666-666666666666',
+  oidc: '77777777-7777-7777-7777-777777777777',
 };
 
 // ---------------------------------------------------------------------------
@@ -159,6 +160,22 @@ await test('username collisions are resolved, not fatal', async () => {
   const rows = await query(`select username from public.profiles where display_name = 'Aziz Carrier'`);
   eq(rows.length, 2, 'two users sharing a display name');
   eq(new Set(rows.map((r) => r.username)).size, 2, 'two distinct usernames');
+});
+
+await test('email-less Telegram OIDC users get a profile without being mislabeled as Google', async () => {
+  await becomeOwner();
+  await exec(`insert into auth.users (id, raw_app_meta_data, raw_user_meta_data) values
+    ('${U.oidc}', '{"provider":"custom:telegram"}', '{"preferred_username":"telegram_joiner","name":"Telegram Joiner"}')`);
+  eq(await scalar(`select username from public.profiles where id = '${U.oidc}'`), 'telegram_joiner');
+  eq(await scalar(`select access_state::text from public.profiles where id = '${U.oidc}'`), 'active');
+  eq(await scalar(`select google_email from public.profiles where id = '${U.oidc}'`), null);
+  eq(await scalar(`select google_email from public.profiles where id = '${U.gated}'`), 'kid@example.com');
+  eq(await scalar(`select google_email from public.profiles where id = '${U.b}'`), null);
+  await exec(`update auth.users set email = 'other@example.com' where id = '${U.oidc}'`);
+  eq(await scalar(`select google_email from public.profiles where id = '${U.oidc}'`), null,
+     'a non-Google address never becomes a Google address');
+  eq(await scalar(`select count(*)::int from public.telegram_accounts where user_id = '${U.oidc}'`), 1,
+     'sign-in alone creates an unlinked TDLib slot');
 });
 
 // ---------------------------------------------------------------------------

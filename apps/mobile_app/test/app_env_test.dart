@@ -38,6 +38,16 @@ void main() {
       expect(configured.realtimeUrl.toString(), 'wss://abcdef12345.supabase.co/realtime/v1/websocket');
     });
 
+    test('Telegram OIDC remains off until a hosted callback has been verified', () {
+      expect(configured.telegramOidcEnabled, false);
+      const verifiedHost = AppEnv(
+        supabaseUrl: 'https://abcdef12345.supabase.co',
+        supabaseAnonKey: 'public-key',
+        telegramOidcEnabled: true,
+      );
+      expect(verifiedHost.telegramOidcEnabled, true);
+    });
+
     test('functions can be served from another origin without touching the API URL', () {
       const split = AppEnv(
         supabaseUrl: 'https://abcdef12345.supabase.co',
@@ -47,7 +57,5 @@ void main() {
       expect(split.functionsPath('telegram-send').toString(), 'https://functions.internal.test/functions/v1/telegram-send');
       expect(configured.functionsPath('telegram-link').toString(), 'https://abcdef12345.supabase.co/functions/v1/telegram-link');
     });
-
-  });
   });
 }

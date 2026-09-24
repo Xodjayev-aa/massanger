@@ -205,6 +205,10 @@ class AuthBloc extends Bloc<AuthEvent, AuthUiState> {
   /// The bloc keeps sign-in errors out of the router and in the sign-in UI.
   Future<void> signInWithGoogle() => _accounts.signInWithGoogle();
 
+  bool get telegramLoginEnabled => _accounts.telegramLoginEnabled;
+
+  Future<void> signInWithTelegram() => _accounts.signInWithTelegram();
+
   /// `heartbeat()` writes `profiles.last_seen_at`, from which `directory.is_online`
   /// is derived. Throttled because the app also calls it on resume; the periodic
   /// timer in the widget layer is the only other caller.
