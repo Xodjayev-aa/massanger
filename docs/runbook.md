@@ -340,51 +340,86 @@ not an uptime guarantee.** The free tier may require payment-card verification.
    ldconfig -p | grep libtdjson
    ```
 
-4. Install this repository **after the new migration and bridge code are in the
-   revision you deploy** (do not expect the unmerged upstream `main` to have
-   them). Keep source readable and session files writable by a dedicated user:
+4. Install **the reviewed remote revision that contains migration 00012 and this
+   unit**, not an older `main`. The next developer first pushes the session branch
+   `arena/01a0d3aa-massanger` after review; set `DEPLOY_REF` to that branch, or
+   to a reviewed release ref once merged. Keep source readable and session files
+   writable by a dedicated user:
 
    ```bash
+   DEPLOY_REF=arena/01a0d3aa-massanger  # only after this branch has been pushed
    sudo useradd --system --home /var/lib/messengerx-bridge --shell /usr/sbin/nologin messengerx
    sudo install -d -o messengerx -g messengerx -m 0755 /opt/messengerx
-   sudo -u messengerx git clone https://github.com/Xodjayev-aa/massanger.git /opt/messengerx
+   sudo -u messengerx git clone --branch "$DEPLOY_REF" --single-branch \
+     https://github.com/Xodjayev-aa/massanger.git /opt/messengerx
    cd /opt/messengerx
    sudo -u messengerx npm ci
    sudo -u messengerx npm run build:bridge
    ```
 
-5. Copy `infra/messengerx-bridge.service` to `/etc/systemd/system/`. Create
-   `/etc/messengerx/bridge.env` (root-owned, mode `0600`) with the hosted project
-   URL/service-role key, Telegram `API_ID`/`API_HASH`, the **same** `SEAL_KEY`,
-   `BRIDGE_TOKEN` and `BRIDGE_HMAC_SECRET` as the functions, plus a **stable**
-   `TDLIB_DB_KEY` (e.g. generate **once** with `openssl rand -base64 32`;
-   TDLib's JSON API expects base64 bytes). Consult
-   `services/telegram_bridge/.env.example` for the exact variable names and
-   generate each secret **once**. Set these nonsecret values too:
+5. Install the **native** systemd unit already in this repo (no container on this
+   path). The service name is `messengerx-bridge`, **not** `massanger-bridge`.
+   Install it from the checked-out revision, create a private environment file
+   *without truncating any existing secrets*, and edit it on the VM. The unit's
+   `ExecStart` assumes NodeSource installed Node at `/usr/bin/node`; check
+   `command -v node` and adjust that path in the unit **before installing** if
+   your distribution differs:
 
-   ```ini
-   MESSENGERX_ENV=production
-   BRIDGE_TRANSPORT=koffi
-   TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so
-   BRIDGE_DATA_DIR=/var/lib/messengerx-bridge
-   BRIDGE_HEALTH_HOST=127.0.0.1
-   BRIDGE_HEALTH_PORT=8787
-   BRIDGE_WORKER_ID=oracle-free-1
-   BRIDGE_MAX_SESSIONS=4
+   ```bash
+   sudo install -D -o root -g root -m 0644 infra/messengerx-bridge.service \
+     /etc/systemd/system/messengerx-bridge.service
+   sudo install -d -o root -g root -m 0700 /etc/messengerx
+   if ! sudo test -e /etc/messengerx/bridge.env; then
+     sudo install -o root -g root -m 0600 /dev/null /etc/messengerx/bridge.env
+   fi
+   sudoedit /etc/messengerx/bridge.env
+   sudo chown root:root /etc/messengerx/bridge.env
+   sudo chmod 0600 /etc/messengerx/bridge.env
    ```
 
-   Do **not** put secrets in a Git-tracked file, systemd unit or shell history.
-   The unit's `StateDirectory=messengerx-bridge` creates the persistent boot-volume
-   folder at `/var/lib/messengerx-bridge` and restricts write access to it.
-   Keep the **directory and the encryption key** across restarts/upgrades; losing
-   either makes linked users reauthenticate. Use a free in-region volume backup
-   within the allowance, and an encrypted off-VM copy of the key. Never scale two
-   workers against the **same** TDLib session directory.
+   Populate `/etc/messengerx/bridge.env` with **real** values (the placeholders
+   below must be replaced, not copied literally):
+
+   ```ini
+   SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+   TELEGRAM_API_ID=YOUR_API_ID
+   TELEGRAM_API_HASH=YOUR_32_HEX_CHARACTER_API_HASH
+   SEAL_KEY=YOUR_SHARED_64_HEX_CHARACTER_KEY
+   BRIDGE_TOKEN=YOUR_SHARED_BRIDGE_TOKEN
+   BRIDGE_HMAC_SECRET=YOUR_SHARED_HMAC_SECRET
+   TDLIB_DB_KEY=YOUR_ONCE_GENERATED_BASE64_32_BYTE_KEY
+   BRIDGE_WORKER_ID=oracle-free-1
+   BRIDGE_MAX_SESSIONS=4
+   TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so
+   BRIDGE_HEALTH_PORT=8787
+   ```
+
+   `SEAL_KEY`, `BRIDGE_TOKEN` and `BRIDGE_HMAC_SECRET` must match the hosted
+   functions (§4); `TDLIB_DB_KEY` must be generated **once** (e.g. `openssl rand
+   -base64 32`) and kept with the session backup. The unit defaults to
+   `MESSENGERX_ENV=production`, `BRIDGE_TRANSPORT=koffi`,
+   `BRIDGE_DATA_DIR=/var/lib/messengerx-bridge` and
+   `BRIDGE_HEALTH_HOST=127.0.0.1`; do not override those with less secure
+   values in the env file. Do **not** put secrets in Git, the unit or shell
+   history. The unit's `StateDirectory=messengerx-bridge`, `StateDirectoryMode=0700`
+   and `UMask=0077` keep TDLib state on the VM's persistent boot volume and
+   private to the service user. Keep **both** the directory and encryption key
+   across restarts/upgrades; losing either makes linked users reauthenticate.
+   Never run two workers against the same TDLib session directory.
+
+   `infra/docker-compose.yml` is a **separate optional** container deployment
+   with its own named volume; it is not a prerequisite for this systemd service.
+   Do not start Compose and systemd together against the same linked account.
+   Outbound HTTPS to Supabase/Telegram is needed, but inbound ports **80/443 are
+   not**: the worker uses polling/Realtime, and its admin listener stays on
+   loopback. Restrict inbound SSH to your IP in OCI and the host firewall.
 
 6. Apply 00012 to hosted Supabase (`supabase db push`, §4), deploy the functions,
    then start the worker and verify it locally on the VM:
 
    ```bash
+   sudo systemd-analyze verify /etc/systemd/system/messengerx-bridge.service
    sudo systemctl daemon-reload
    sudo systemctl enable --now messengerx-bridge
    sudo systemctl status messengerx-bridge
@@ -423,12 +458,17 @@ fee. Nothing in this recipe signs or distributes an iOS app.
 ```bash
 cd services/telegram_bridge
 cp .env.example .env          # or `make env` from the repo root
+# Replace placeholders: .env is ignored by Git, and Node 22 loads it explicitly.
 BRIDGE_TRANSPORT=memory npm run dev
 ```
 
-With `memory` the worker starts a fake Telegram core: linking, code entry, sending,
-read receipts and FLOOD_WAIT parking all behave as they do against the real thing, and
-`SIM_PHONE_CODE` accepts a fixed code so you can walk the whole flow without a phone:
+`npm run dev` uses `node --env-file=.env`; `make bridge` sets the memory
+transport the same way. Fill in a reachable Supabase URL/service-role key (and
+function secrets if using the ingest function): copying placeholders is not a
+working server configuration. With `memory` the worker starts a fake Telegram
+core: linking, code entry, sending, read receipts and FLOOD_WAIT parking behave
+as they do against the real thing, and `SIM_PHONE_CODE` accepts a fixed code so
+you can walk the whole flow without a phone:
 
 ```
 GET  /healthz  → {"ok":true,"transport":"memory",…}
@@ -445,18 +485,53 @@ returns 404 with no hint of what exists.
 
 ### 5.2 Real TDLib, against your own account
 
+**Handoff gate (a workstation with Flutter and physical phones):** first review
+and push the session branch **on the source checkout** when ready to share:
+
 ```bash
-export BRIDGE_TRANSPORT=koffi        # pinned libtdjson.so, no sidecar
-export TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so
-export TDLIB_DB_KEY="$(openssl rand -base64 32)"   # generate once; keep it in your secret manager
-export TELEGRAM_API_ID=00000000
-export TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
-npm run build && npm start
+git push origin arena/01a0d3aa-massanger
 ```
 
-(`TELEGRAM_API_HASH` from <https://my.telegram.org> → API development tools. One app
-per deployment; never reuse a bot's app id, and never put the hash in the repo — it is
-a secret despite the name `api_id` being public.)
+On the **test machine** (or use an existing checkout of the same reviewed ref):
+
+```bash
+git clone --branch arena/01a0d3aa-massanger --single-branch \
+  https://github.com/Xodjayev-aa/massanger.git
+cd massanger
+bash tools/verify-client.sh  # pub get → strict analyze → test; private logs in .messengerx/
+```
+
+If the analyzer reports mechanical fixes, apply them **explicitly** and review
+source changes before committing:
+
+```bash
+bash tools/verify-client.sh --fix  # dart fix + format, then rerun analyze and test
+git diff --check && git diff
+```
+
+`--fix` is **opt-in**, not a silent formatter pass. Strict analysis can report
+informational lints even when CI's `flutter analyze --no-fatal-infos` is green;
+resolve meaningful warnings and rerun. Do **not** proceed to the device verdict
+on a failed analyzer or test suite. This repository's current environment has
+no Flutter SDK; those results must come from the target machine.
+
+Then build/launch the **real** worker with your own Telegram API credentials.
+On the Oracle VM, §4.1 builds pinned `libtdjson.so` and the bridge; start it with
+`sudo systemctl enable --now messengerx-bridge`. For a *separate local* smoke test
+from the repository root, after filling the ignored
+`services/telegram_bridge/.env` with real credentials and a **stable**
+`TDLIB_DB_KEY` (not a freshly generated key at every restart), use Node 22's
+`--env-file` explicitly; the bridge does not auto-load `.env`:
+
+```bash
+npm run build:bridge
+node --env-file=services/telegram_bridge/.env services/telegram_bridge/dist/main.js
+```
+
+Set `BRIDGE_TRANSPORT=koffi`, `TDLIB_LIBRARY_PATH` and all Supabase/Telegram
+credentials in that file, with the same `SEAL_KEY` as the edge functions. Get
+`TELEGRAM_API_ID`/`TELEGRAM_API_HASH` from <https://my.telegram.org> → API
+development tools. Never reuse a bot's app id or put your API hash in Git.
 
 Then in the app: **Telegram → Link account**. Enter your Telegram phone number,
 then the code Telegram sends (often to another logged-in Telegram device), then
@@ -480,23 +555,32 @@ What to check when you do this for real (the CI suite cannot):
 5. Kill the worker (`^C`) and restart it: sessions are restored from `BRIDGE_DATA_DIR`,
    the link is still valid, and no old Telegram inbound row is duplicated
    (`(chat_id, source, tg_message_id)` is the idempotency key).
-6. **Offline notices (00012):** link *both* test users' Telegram accounts, leave the
-   recipient's MessengerX app for >90 s, then send from another MessengerX user.
-   Allow the 3-second folding window plus a poll. The recipient should see one
+6. **Offline notices (00012):** link the *recipient's* Telegram test account
+   by phone + code. Use a **second MessengerX user** to send a real message while
+   the recipient's MessengerX app has been away for >90 s; the database trigger,
+   not a manual `notify_requests` insert, creates the queue row. Allow the
+   3-second folding window plus a poll. The recipient should see one
    `MessengerX · sender` text in **their own Saved Messages**. Send two more in
    quick succession; they should fold into one notice with `+N more`. Check
    `notify_requests.state = sent`, `tg_self_chat_id`, `tg_message_id` and the
-   bridge's `messengerx_bridge_notices_total` metric. A mirrored Telegram-origin
-   message already delivered by that same Telegram account must **not** add a
-   second notice. Reading, muting for 8 hours, switching push off, or reopening
-   the app before the claim must cancel a queued notice; switching previews off
-   must render a generic notice and erase queued text. While MessengerX is in
-   front, a new non-mirrored message in another unmuted thread should show a
-   brief local banner; a message in the open thread should not. Repeat on iOS
-   and Android. **Check whether your Telegram client actually displays an OS
-   notification for a self-sent Saved Messages entry:** Telegram may suppress
-   them, and this repo cannot force Telegram/Apple to buzz. Without APNs/FCM
-   this is best-effort Telegram delivery, not a native push guarantee.
+   bridge's `messengerx_bridge_notices_total` metric. For the separate
+   Telegram-mirroring duplicate test, link the sender's Telegram account too:
+   a Telegram-origin message already delivered to the recipient must **not**
+   add a second notice. Reading, muting for 8 hours, switching push off, or
+   reopening the app before the claim must cancel a queued notice; switching
+   previews off must render a generic notice and erase queued text. While
+   MessengerX is in front, a new non-mirrored message in another unmuted thread
+   should show a brief local banner; an open-thread message should not.
+7. **iOS OS-alert verdict (not covered by CI):** enable lock-screen alerts for
+   the official Telegram app on a real iPhone, disable Focus/Do Not Disturb,
+   lock the device and repeat step 6. Confirm **both** the Saved Messages entry
+   and an actual lock-screen alert; repeat on Android too. A delivered row is
+   *not* proof that an iOS banner appeared: Telegram can suppress notifications
+   for self-sent messages. If there is no lock-screen alert, Path A+C does **not**
+   meet the background-alert goal on that device; Path C still works *while the
+   app is open*. Do not claim native push or automatically switch to Path B:
+   APNs/FCM requires a separately approved design, and iOS APNs/App Store
+   distribution needs Apple's paid developer program (outside the $0 budget).
 
 ### 5.3 Configuration worth knowing
 

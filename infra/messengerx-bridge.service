@@ -11,8 +11,16 @@ Type=simple
 User=messengerx
 Group=messengerx
 WorkingDirectory=/opt/messengerx
+# Defaults are fail-closed; bridge.env supplies credentials and may override
+# tuning, but must not expose the admin listener or move session files to /tmp.
+Environment=NODE_ENV=production
+Environment=MESSENGERX_ENV=production
+Environment=BRIDGE_TRANSPORT=koffi
+Environment=BRIDGE_HEALTH_HOST=127.0.0.1
+Environment=BRIDGE_DATA_DIR=/var/lib/messengerx-bridge
 EnvironmentFile=/etc/messengerx/bridge.env
 ExecStart=/usr/bin/node /opt/messengerx/services/telegram_bridge/dist/main.js
+UMask=0077
 Restart=always
 RestartSec=10
 TimeoutStopSec=45

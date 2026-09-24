@@ -82,13 +82,17 @@ Everything that can be checked without a Telegram account or a phone is checked 
 | `npm run test:seed` | 8/8 | `seed.sql` applies on top of the migrations and its fixtures hold |
 | `npm run test:bridge` | 102/102 | auth, outbox, notice sends + self-chat suppression, flood parking, media, ingest, admin HTTP |
 | `npm run typecheck` | clean | all four Deno functions and the worker, under `strict` |
-| `make app` / `flutter test` | needs the SDK | the analyzer and the app's own tests are the gate |
+| `bash tools/verify-client.sh` | requires Flutter SDK; not run here | `pub get`, strict analyzer, then tests; optional `--fix` applies Dart fixes/format |
 
 The Flutter sources in `apps/mobile_app/` need the Flutter SDK for `flutter analyze`
 and `flutter test` (including the new notification preference test). This sandbox has
 no Flutter SDK, so their analyzer/widget status is **not yet verified** here; run
-both on a machine or CI with Flutter ≥3.24 before distributing a build. A real
-Telegram account and iOS/Android device are needed for the notice-buzz smoke test.
+both on a machine or CI with Flutter ≥3.24 before distributing a build. Run
+`bash tools/verify-client.sh` there (`--fix` only when you choose to modify Dart
+sources). For the Oracle VM use the checked-in `infra/messengerx-bridge.service`
+and the installation block in [runbook §4.1](docs/runbook.md).
+A real Telegram account and iOS/Android device are needed for the notice-buzz
+smoke test; a Saved Messages row alone is not proof of an iOS lock-screen alert.
 
 ## Rules of the house
 
