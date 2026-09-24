@@ -38,11 +38,12 @@ import { HttpError, type LinkEnvelopePayload, type SyncDirection } from '../_sha
 
 const FUNCTION_NAME = 'telegram-link';
 
-type Action = 'start' | 'submit' | 'status' | 'cancel' | 'unlink' | 'preferences' | 'chatSync';
+type Action = 'start' | 'submit' | 'status' | 'cancel' | 'unlink' | 'preferences' | 'chatSync' | 'startChat';
 
 type RequestBody = {
   action?: Action;
   phone?: string;
+  username?: string;
   useQr?: boolean;
   requestId?: string;
   code?: string;
@@ -171,6 +172,18 @@ async function handle(request: Request): Promise<Response> {
         const data = await rpc(asUser, 'telegram_set_preferences', args);
         await wakeBridge(env, { kind: 'relink', user_ids: [caller.uid] });
         return ok(data ?? {}, cors);
+      }
+
+      case 'startChat': {
+        // The RPC validates link state, enforces a persistent per-user limit,
+        // and accepts only a public @username. No client-supplied Telegram chat
+        // ID can reach the bridge's mapping/finish functions.
+        const username = expectString(body.username, 'username', { max: 64 })!;
+        const data = await rpc<{ request_id: string; status: string; expires_at: string }>(
+          asUser, 'telegram_start_chat', { p_username: username },
+        );
+        await wakeBridge(env, { kind: 'chat', user_ids: [caller.uid], ids: [data.request_id] });
+        return ok(data, cors);
       }
 
       case 'chatSync': {

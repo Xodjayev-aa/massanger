@@ -1464,6 +1464,101 @@ await test('retry exhaustion stops a permanently parked notice', async () => {
 });
 
 // ---------------------------------------------------------------------------
+group('new Telegram contacts (00016)');
+let contactRequestId = null;
+let contactChatId = null;
+await test('starting a Telegram chat requires a linked, permitted TDLib account', async () => {
+  await become(U.oidc);
+  await throws(() => rpc('public.telegram_start_chat', "'@FreshContact'"), /Connect Telegram/);
+  await becomeService();
+  await exec(`update public.telegram_accounts
+     set tg_user_id = 840001, auth_state = 'linked', mirror_to_app = false
+   where user_id = '${U.oidc}'`);
+  await become(U.oidc);
+  await throws(() => rpc('public.telegram_start_chat', "'@FreshContact'"), /enable mirroring/);
+  await becomeService();
+  await exec(`update public.telegram_accounts set mirror_to_app = true where user_id = '${U.oidc}'`);
+});
+
+await test('only a public username can be requested; the queue cannot be forged by clients', async () => {
+  await become(U.oidc);
+  await throws(() => rpc('public.telegram_start_chat', "'+998901112233'"), /public Telegram username/);
+  await throws(() => rpc('public.telegram_start_chat', "'t.me/other'"), /public Telegram username/);
+  const [queued] = await rpc('public.telegram_start_chat', "'  @FreshContact  '");
+  contactRequestId = queued.telegram_start_chat.request_id;
+  assert(contactRequestId, 'an owner-only queue receipt is returned');
+  const [again] = await rpc('public.telegram_start_chat', "'freshcontact'");
+  eq(again.telegram_start_chat.request_id, contactRequestId, 'two devices do not duplicate a pending lookup');
+  await throws(() => exec(`select * from public.telegram_chat_requests`), /permission denied/);
+  await throws(() => exec(`update public.telegram_chat_requests set status = 'succeeded'`), /permission denied/);
+  await throws(() => rpc('public.bridge_claim_chat_request', "'hacker', null, '1 second'"), /permission denied/);
+  await become(U.b);
+  eq((await rpc('public.telegram_chat_request_state', `'${contactRequestId}'`))[0].telegram_chat_request_state,
+     null, 'another account cannot inspect the request');
+});
+
+await test('only a real private chat mapped to the requester can finish a claimed lookup', async () => {
+  await becomeService();
+  const noOther = await rpc('public.bridge_claim_chat_request', `'worker-1', '${U.other}', '10 seconds'`);
+  eq(noOther[0].bridge_claim_chat_request, null, 'the wrong owner has no work');
+  const [row] = await rpc('public.bridge_claim_chat_request', `'worker-1', '${U.oidc}', '10 seconds'`);
+  eq(row.bridge_claim_chat_request.request_id, contactRequestId);
+  eq(row.bridge_claim_chat_request.username, 'freshcontact');
+  eq((await rpc('public.bridge_finish_chat_request', `'${contactRequestId}', 'worker-else', null, 'ignored', null`))[0].bridge_finish_chat_request,
+     false, 'another worker cannot complete the lease');
+  await throws(
+    () => rpc('public.bridge_finish_chat_request', `'${contactRequestId}', 'worker-1', '${chatId}', null, null`),
+    /private Telegram mirror owned by the requester/,
+  );
+  const [created] = await rpc('public.bridge_resolve_chat',
+    `'${U.oidc}', 550001, 'private', 'Fresh Contact', 550001, 'freshcontact', 'Fresh', 'Contact', null, true`);
+  contactChatId = created.bridge_resolve_chat.chat_id;
+  assert(contactChatId, 'TDLib bridge created an owner-scoped mirror');
+  eq((await rpc('public.bridge_finish_chat_request', `'${contactRequestId}', 'worker-1', '${contactChatId}', null, null`))[0].bridge_finish_chat_request,
+     true);
+  await become(U.oidc);
+  const [state] = await rpc('public.telegram_chat_request_state', `'${contactRequestId}'`);
+  eq(state.telegram_chat_request_state.status, 'succeeded');
+  eq(state.telegram_chat_request_state.chat_id, contactChatId);
+  eq((await query(`select count(*)::int as n from public.telegram_chats where chat_id = '${contactChatId}'`))[0].n,
+     1, 'the client can see only its own mirrored chat');
+});
+
+await test('a Telegram group username is never accepted as a private-contact chat', async () => {
+  await become(U.oidc);
+  const [queued] = await rpc('public.telegram_start_chat', "'@publicgroup'");
+  await becomeService();
+  const [claim] = await rpc('public.bridge_claim_chat_request', `'worker-1', '${U.oidc}', '10 seconds'`);
+  eq(claim.bridge_claim_chat_request.request_id, queued.telegram_start_chat.request_id);
+  const [groupChat] = await rpc('public.bridge_resolve_chat',
+    `'${U.oidc}', 650001, 'supergroup', 'Public group', null, null, null, null, null, true`);
+  await throws(
+    () => rpc('public.bridge_finish_chat_request', `'${queued.telegram_start_chat.request_id}', 'worker-1', '${groupChat.bridge_resolve_chat.chat_id}', null, null`),
+    /private Telegram mirror/,
+  );
+  eq((await rpc('public.bridge_finish_chat_request',
+    `'${queued.telegram_start_chat.request_id}', 'worker-1', null, 'Only Telegram users can be opened here', null`))[0].bridge_finish_chat_request,
+    true);
+  await become(U.oidc);
+  eq((await rpc('public.telegram_chat_request_state', `'${queued.telegram_start_chat.request_id}'`))[0].telegram_chat_request_state.status,
+     'failed');
+});
+
+await test('rate limits persist in SQL instead of relying on an edge process cache', async () => {
+  await become(U.oidc);
+  for (const name of ['aliceb', 'alicec', 'aliced']) {
+    const [result] = await rpc('public.telegram_start_chat', `'${name}'`);
+    assert(result.telegram_start_chat.request_id);
+  }
+  await throws(() => rpc('public.telegram_start_chat', "'alicee'"), /Too many Telegram lookups/);
+  await becomeService();
+  await exec(`update public.telegram_accounts set auth_state = 'unlinked', tg_user_id = null
+               where user_id = '${U.oidc}'`);
+  eq((await rpc('public.bridge_claim_chat_request', `'worker-1', '${U.oidc}', '1 second'`))[0].bridge_claim_chat_request,
+     null, 'the worker cannot open a new chat once the account has unlinked');
+});
+
+// ---------------------------------------------------------------------------
 await becomeOwner();
 const failed = results.filter((r) => !r.ok);
 let lastGroup = null;

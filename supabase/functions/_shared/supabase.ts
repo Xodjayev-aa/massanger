@@ -140,6 +140,17 @@ export async function rpc<T>(
   const { data, error } = await client.rpc(fn, args);
   if (error) {
     const message = error.message ?? '';
+    if (fn === 'telegram_start_chat') {
+      if (error.code === '42501') {
+        throw new HttpError('forbidden', 'Connect Telegram and enable chat mirroring and outbound sync first.');
+      }
+      if (error.code === '22023') {
+        throw new HttpError('bad_request', 'Enter a public Telegram @username (5–32 letters, digits or underscores).');
+      }
+      if (error.code === 'P0001' && /Too many Telegram lookups/i.test(message)) {
+        throw new HttpError('rate_limited', 'Too many Telegram lookups. Try again in a minute.', { retryAfterSeconds: 60 });
+      }
+    }
     if (/not eligible|server-managed|permission denied|row-level security/i.test(message)) {
       throw new HttpError('forbidden', message);
     }

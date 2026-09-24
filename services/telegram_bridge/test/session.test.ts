@@ -104,6 +104,69 @@ describe('telegram session', () => {
     assert.equal(body.p_login_token_enc, null, 'no login token is minted unless the operator asks');
   });
 
+  it('opens a previously unknown public Telegram user as an owner-scoped private mirror', async () => {
+    const config = testConfig();
+    const sim = new TelegramSimulator({ chats: [] });
+    const rec = recorder();
+    const session = new TelegramSession({
+      config,
+      db: new SupabaseBridge(config, rec.fetchImpl),
+      context: accountContext({ tg_user_id: '777001' }),
+      transportFor: () => sim,
+    });
+    harness = { config, sim, rec, session, storageDir: os.tmpdir() };
+    await session.start();
+    await linkInto(rec, config, session);
+    sim.addChat({ id: 5_551_001, peerUserId: 5_551_001, type: 'private', username: 'new_friend', title: 'New Friend' });
+    rec.reply('bridge_resolve_chat', { chat_id: CHAT_ID, created: true, mapping_id: 'test-mapping' });
+    assert.equal(await session.openPublicChat('new_friend'), CHAT_ID);
+    const resolution = rec.find('bridge_resolve_chat');
+    assert.equal(resolution?.json().p_owner_user_id, session.ownerUserId);
+    assert.equal(resolution?.json().p_tg_chat_id, '5551001');
+    assert.equal(resolution?.json().p_peer_user_id, '5551001');
+    assert.equal(resolution?.json().p_tg_chat_type, 'private');
+  });
+
+  it('registers Telegram groups as groups, not as private users', async () => {
+    const config = testConfig();
+    const sim = new TelegramSimulator({ chats: [
+      { id: 9_991, title: 'Friends', type: 'supergroup' },
+    ] });
+    const rec = recorder();
+    const session = new TelegramSession({
+      config, db: new SupabaseBridge(config, rec.fetchImpl),
+      context: accountContext({ tg_user_id: '777001' }), transportFor: () => sim,
+    });
+    harness = { config, sim, rec, session, storageDir: os.tmpdir() };
+    await session.start();
+    await linkInto(rec, config, session);
+    const resolved = await until(() => rec.find('bridge_resolve_chat'));
+    assert.equal(resolved.json().p_tg_chat_type, 'supergroup');
+    assert.equal(resolved.json().p_peer_user_id, null);
+  });
+
+  it('refuses numeric IDs, groups, missing users, Saved Messages and wrong TDLib identities', async () => {
+    const config = testConfig();
+    const sim = new TelegramSimulator({ chats: [] });
+    const rec = recorder();
+    const session = new TelegramSession({
+      config,
+      db: new SupabaseBridge(config, rec.fetchImpl),
+      context: accountContext({ tg_user_id: '777001' }),
+      transportFor: () => sim,
+    });
+    harness = { config, sim, rec, session, storageDir: os.tmpdir() };
+    await session.start();
+    await linkInto(rec, config, session);
+    sim.addChat({ id: 8_881, type: 'supergroup', username: 'somegroup' });
+    sim.addChat({ id: 777_001, type: 'private', peerUserId: 777_001, username: 'ownaccount' });
+    await assert.rejects(() => session.openPublicChat('987654321'), /invalid public Telegram username/);
+    await assert.rejects(() => session.openPublicChat('somegroup'), /not a private user/);
+    await assert.rejects(() => session.openPublicChat('doesntexist'), /USERNAME_NOT_OCCUPIED/);
+    await assert.rejects(() => session.openPublicChat('ownaccount'), /Saved Messages/);
+    assert.equal(rec.find('bridge_resolve_chat'), undefined, 'no invalid lookup ever creates a database chat');
+  });
+
   it('gracefully redirects an encrypted QR request to phone authentication without blocking notices', async () => {
     const { config, session, rec, sim } = harness;
     await session.start();

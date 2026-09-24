@@ -1223,6 +1223,43 @@ export class TelegramSession {
     });
   }
 
+  /**
+   * Resolve an explicit public @username *in this owner's TDLib session*, never
+   * a caller-supplied Telegram numeric id. Only private chats can be returned;
+   * channels/groups and Saved Messages are not new person-to-person threads.
+   * The database still verifies that the returned chat belongs to this owner
+   * before it completes the request.
+   */
+  async openPublicChat(username: string): Promise<string> {
+    if (!this.ready || !this.options.context.mirror_to_app ||
+        !['both', 'to_telegram'].includes(this.options.context.sync_direction)) {
+      throw new Error('Telegram session is not ready for new chats');
+    }
+    if (!/^[a-z][a-z0-9_]{4,31}$/.test(username)) {
+      throw new Error('invalid public Telegram username');
+    }
+    // Never reuse a stale local TDLib directory for a different account: the
+    // database's linked tg_user_id is the owner identity, not the disk folder.
+    const me = await this.client.request<TdObject>('getMe', {});
+    if (me.id == null || String(me.id) !== String(this.options.context.tg_user_id)) {
+      throw new Error('TDLib identity does not match the linked Telegram account');
+    }
+
+    const chat = await this.client.request<TdObject>('searchPublicChat', { username });
+    const type = chat.type as TdObject | undefined;
+    const peerId = type?.user_id == null ? '' : String(type.user_id);
+    if (type?.['@type'] !== 'chatTypePrivate' || !/^\d{1,20}$/.test(peerId)) {
+      throw new Error('The Telegram username is not a private user');
+    }
+    if (peerId === String(me.id)) throw new Error('Saved Messages cannot be opened as a new chat');
+
+    await this.#registerChat(chat);
+    const info = this.#chats.get(String(chat.id));
+    if (!info?.chatId) throw new Error('Could not mirror that Telegram chat yet');
+    this.counters.lastPumpAt = Date.now();
+    return info.chatId;
+  }
+
   async #prepareChats(): Promise<void> {
     const chats = await this.#getChats();
     for (const chatId of chats) {
@@ -1257,7 +1294,11 @@ export class TelegramSession {
     const tgChatId = String(chat.id ?? '');
     if (!tgChatId || tgChatId === 'undefined') return;
 
-    const type = tdChatType(chat) ?? 'private';
+    // tdChatType accepts a TDLib chatType object, *not* the outer chat object.
+    // Treat unknown types as unsupported rather than silently mirroring a
+    // supergroup/channel as a private conversation.
+    const type = tdChatType((chat.type as TdObject | undefined) ?? {});
+    if (!type) return;
     const title = typeof chat.title === 'string' ? chat.title : null;
     const peerUserId =
       type === 'private' ? String((chat.type as TdObject | undefined)?.user_id ?? '') || null : null;

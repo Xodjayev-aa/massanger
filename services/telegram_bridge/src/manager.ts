@@ -1,9 +1,10 @@
 /**
  * The session supervisor.
  *
- * Three queues drive everything: `telegram_link_requests` (interactive),
- * `telegram_outbox` (app → Telegram) and `notify_requests` (offline Saved
- * Messages notices). The manager claims from all three, owns per-account
+ * Four queues drive everything: `telegram_link_requests` (interactive),
+ * `telegram_chat_requests` (public @username discovery), `telegram_outbox`
+ * (app → Telegram) and `notify_requests` (offline Saved Messages notices).
+ * The manager claims from all four, owns per-account
  * sessions, and keeps the process honest about
  * what it is holding:
  *
@@ -20,10 +21,11 @@
 
 import type { BridgeConfig } from './config.js';
 import { logger as rootLogger, type Logger } from './logging.js';
-import type { AccountContext, LinkClaim, NotifyRow } from './supabase.js';
+import type { AccountContext, ChatStartClaim, LinkClaim, NotifyRow } from './supabase.js';
 import { SupabaseBridge, SupabaseError } from './supabase.js';
 import { TelegramSession, type NoticeResult, type PumpResult, type TransportFactory } from './session.js';
-import { isAbort, sleep } from './util/backoff.js';
+import { TdLibError } from './tdlib.js';
+import { floodWaitSeconds, isAbort, sleep } from './util/backoff.js';
 
 export type ManagerOptions = {
   config: BridgeConfig;
@@ -33,7 +35,7 @@ export type ManagerOptions = {
 };
 
 export type WakeInput = {
-  kind?: 'outbox' | 'notify' | 'link' | 'relink' | 'media';
+  kind?: 'outbox' | 'notify' | 'link' | 'relink' | 'media' | 'chat';
   user_ids?: string[];
   ids?: string[];
 };
@@ -54,6 +56,7 @@ export type ManagerMetrics = {
     duplicates: number;
     errors: number;
     link_requests: number;
+    chat_requests: number;
     parked: number;
     notices: number;
     notices_failed: number;
@@ -61,6 +64,7 @@ export type ManagerMetrics = {
 };
 
 const LINK_CLAIMS_PER_TICK = 4;
+const CHAT_CLAIMS_PER_TICK = 4;
 
 export class BridgeManager {
   readonly startedAt = Date.now();
@@ -79,6 +83,7 @@ export class BridgeManager {
     duplicates: 0,
     errors: 0,
     link_requests: 0,
+    chat_requests: 0,
     parked: 0,
     notices: 0,
     notices_failed: 0,
@@ -142,7 +147,7 @@ export class BridgeManager {
     this.#log.info('bridge manager stopped', { sessions: sessions.length, ...this.totals });
   }
 
-  /** One full pass: link requests first, then app sends and offline notices. */
+  /** One full pass: link requests, new chats, app sends, then offline notices. */
   async tick(): Promise<{ linkRequests: number; pump: number }> {
     if (this.#tickBusy) return { linkRequests: 0, pump: 0 };
     this.#tickBusy = true;
@@ -151,7 +156,8 @@ export class BridgeManager {
     let pump = 0;
     try {
       linkRequests = (await this.#drainLinkRequests()).linkRequestsHandled;
-      pump = await this.#pumpOutbox();
+      pump = await this.#drainChatRequests();
+      pump += await this.#pumpOutbox();
       pump += await this.#pumpNotify();
     } catch (error) {
       if (!isAbort(error)) {
@@ -177,6 +183,11 @@ export class BridgeManager {
 
     if (input.kind === 'link' || input.kind === 'relink' || owners.length === 0) {
       pumped += (await this.#drainLinkRequests()).linkRequestsHandled;
+    }
+    if (input.kind === 'chat') {
+      for (const owner of owners.slice(0, 50)) pumped += await this.#drainChatRequests(owner);
+      if (owners.length === 0) pumped += await this.#drainChatRequests();
+      return { sessions: this.#sessions.size, pumped };
     }
 
     if (owners.length > 0) {
@@ -268,6 +279,59 @@ export class BridgeManager {
         })
         .catch(() => undefined);
       await this.#dropSession(claim.user_id, 'link failed');
+    }
+  }
+
+  // ── new Telegram contacts (public @username only) ───────────────────────
+
+  async #drainChatRequests(owner: string | null = null): Promise<number> {
+    let handled = 0;
+    for (let index = 0; index < CHAT_CLAIMS_PER_TICK; index++) {
+      const claim = await this.db.claimChatRequest(owner).catch((error: Error) => {
+        this.#log.warn('could not claim a Telegram username lookup', { error: error.message });
+        return null;
+      });
+      if (!claim) break;
+      await this.#handleChatRequest(claim);
+      handled++;
+    }
+    return handled;
+  }
+
+  async #handleChatRequest(claim: ChatStartClaim): Promise<void> {
+    this.totals.chat_requests++;
+    try {
+      const session = await this.#ensureSession(claim.user_id, { create: true });
+      if (!session?.ready) {
+        await this.db.finishChatRequest({ requestId: claim.request_id, retrySeconds: 10 });
+        return;
+      }
+      const chatId = await session.openPublicChat(claim.username);
+      const applied = await this.db.finishChatRequest({ requestId: claim.request_id, chatId });
+      if (!applied) this.#log.info('username lookup lease expired before completion', { request_id: claim.request_id });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.totals.errors++;
+      this.#log.warn('Telegram username lookup failed', { request_id: claim.request_id, error: message });
+      const missing = error instanceof TdLibError && /USERNAME_(?:NOT_OCCUPIED|INVALID)|CHAT_NOT_FOUND/i.test(message);
+      const retry = !missing && (error instanceof SupabaseError && error.retryable ||
+        error instanceof TdLibError && error.floodWaitSeconds !== null && error.floodWaitSeconds <= 90 ||
+        /not ready|not mirror.*yet/i.test(message));
+      const clientMessage = missing ? 'No Telegram user has that public username.'
+        : /not a private user/i.test(message) ? 'That username belongs to a group or channel, not a person.'
+        : /Saved Messages/i.test(message) ? 'This is your own Telegram account.'
+        : /identity does not match/i.test(message) ? 'Reconnect your Telegram account before starting a chat.'
+        : 'Telegram could not open that chat. Try again later.';
+      // Never expose the raw TDLib error or a database error to the client.
+      await this.db.finishChatRequest({
+        requestId: claim.request_id,
+        error: clientMessage,
+        retrySeconds: retry ? Math.max(10, floodWaitSeconds(message) ?? 10) : null,
+      }).catch((finishError: Error) =>
+        this.#log.warn('could not complete Telegram username lookup', {
+          request_id: claim.request_id, error: finishError.message,
+        }),
+      );
     }
   }
 

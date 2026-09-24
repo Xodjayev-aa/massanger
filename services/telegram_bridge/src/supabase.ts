@@ -61,6 +61,14 @@ export type LinkClaim = {
   };
 };
 
+export type ChatStartClaim = {
+  request_id: string;
+  user_id: string;
+  /** A lowercased, validated public username; never a phone or numeric user ID. */
+  username: string;
+  attempts: number;
+};
+
 export type OutboxRow = {
   /** `telegram_outbox.id` (bigint sequence; doubles as TDLib's `sending_id`). */
   outbox_id: number;
@@ -276,6 +284,30 @@ export class SupabaseBridge {
       p_session_ref: input.sessionRef ?? null,
       p_last_sync: input.lastSync ?? false,
     });
+  }
+
+  // ── public Telegram @username → private mirrored chat (00016) ────────────
+  claimChatRequest(ownerUserId: string | null = null): Promise<ChatStartClaim | null> {
+    return this.rpc<ChatStartClaim | null>('bridge_claim_chat_request', {
+      p_worker: this.config.workerId,
+      p_owner: ownerUserId,
+      p_lease: `${this.config.outboxLeaseSeconds} seconds`,
+    }, { shape: 'scalar' });
+  }
+
+  finishChatRequest(input: {
+    requestId: string;
+    chatId?: string | null;
+    error?: string | null;
+    retrySeconds?: number | null;
+  }): Promise<boolean> {
+    return this.rpc<boolean>('bridge_finish_chat_request', {
+      p_request_id: input.requestId,
+      p_worker: this.config.workerId,
+      p_chat_id: input.chatId ?? null,
+      p_error: input.error ?? null,
+      p_retry_in: input.retrySeconds ? `${Math.max(1, input.retrySeconds)} seconds` : null,
+    }, { shape: 'scalar' });
   }
 
   // ── outbox ────────────────────────────────────────────────────────────────

@@ -31,6 +31,7 @@ export type SimulatorChat = {
   type?: 'private' | 'basic_group' | 'supergroup';
   peerUserId?: number;
   peerName?: string;
+  username?: string;
 };
 
 export class TelegramSimulator implements TdLibTransport {
@@ -358,6 +359,21 @@ export class TelegramSimulator implements TdLibTransport {
           const chat = this.#findChat(Number(request.chat_id));
           if (!chat) {
             fail(400, 'CHAT_NOT_FOUND');
+            return;
+          }
+          reply(this.#chatObject(chat));
+          return;
+        }
+
+        case 'searchPublicChat': {
+          if (this.#authorization.state !== 'ready') {
+            fail(407, 'AUTH_READ_REQUIRED');
+            return;
+          }
+          const name = String(request.username ?? '').replace(/^@/, '').toLowerCase();
+          const chat = this.#chats.find((item) => item.username?.toLowerCase() === name);
+          if (!chat) {
+            fail(400, 'USERNAME_NOT_OCCUPIED');
             return;
           }
           reply(this.#chatObject(chat));
