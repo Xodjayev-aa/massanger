@@ -3,9 +3,10 @@
 Operational truth for this repository: how to get it running, what has to be
 provisioned outside the repo, and what to do when Telegram stops syncing.
 
-Numbers quoted here are asserted by the test suites, not by memory: 59 schema
-behaviours (`tools/sql-test/run.mjs`), 8 seed checks (`tools/sql-test/seed-check.mjs`),
-87 bridge behaviours (`services/telegram_bridge/test/*.test.ts`).
+Numbers quoted here are asserted by the local test suites: 79 schema behaviours
+(`tools/sql-test/run.mjs`), 8 seed checks (`tools/sql-test/seed-check.mjs`),
+102 bridge behaviours (`services/telegram_bridge/test/*.test.ts`). The Flutter SDK
+is required separately to run its analyzer/tests.
 
 ---
 
@@ -57,13 +58,14 @@ exposes three interchangeable transports and one of them is a simulator:
 | --- | --- | --- |
 | `memory` | In-process TDLib simulator. Real outbox loop, real lease/FLOOD_WAIT handling, fake Telegram. | unit/integration tests, `make bridge` on a laptop, demos |
 | `koffi` | `libtdjson` loaded into the Node process | production default |
-| `websocket` | A websocket TDLib sidecar (`TD_WS_URL`) | when you want TDLib upgraded independently of the worker image |
+| `websocket` | WebSocket transport (`TD_WS_URL`); requires your own verified adapter | optional only; no sidecar image is bundled or tested here |
 
 The suite (`npm run test:bridge`) exercises the protocol **contract** against
 `memory`, which is the only honest way to test `updateAuthorizationState`,
 `sending_id` echo correlation and `FLOOD_WAIT_n` parking without talking to
-Telegram's servers. `koffi`/`websocket` are then verified by the same code path against a
-real account — §5 ends with that checklist. GramJS is deliberately **not** an adapter:
+Telegram's servers. The real `koffi` path **still needs** a TDLib build and a
+real-account/phone verification — §5 ends with that checklist. The optional
+`websocket` adapter is not part of the Oracle deployment and is unverified here. GramJS is deliberately **not** an adapter:
 it cannot correlate an outbound message with its `sending_id`, and its own
 authorization state machine cannot be paused to let the user type a code, which is the
 whole shape of the link flow.
@@ -84,7 +86,7 @@ Flutter app ──PostgREST/RPC──▶ Supabase (Postgres + Storage + Realtime
 ```
 
 Four edge functions (`account-age-gate`, `telegram-link`, `telegram-send`,
-`telegram-ingest`), eleven migrations, one long-lived Node worker per shard, and the
+`telegram-ingest`), twelve migrations, one long-lived Node worker per shard, and the
 app. The app never holds a Telegram credential: credentials travel inside a
 per-request AES-GCM envelope that only the bridge can open, and the envelope never
 lands in a table (`telegram_link_requests.payload` stores ciphertext, and
@@ -142,8 +144,8 @@ Migrations and `seed.sql` are applied by `supabase start` (and by
 `supabase db reset`, which is the check CI runs against PGlite):
 
 ```bash
-make db-reset        # replay 00001..00011 then seed.sql
-npm run check        # 59 SQL + 8 seed + 87 bridge assertions + both typechecks
+make db-reset        # replay 00001..00012 then seed.sql
+npm run check        # 79 SQL + 8 seed + 102 bridge assertions + both typechecks
 make bridge          # BRIDGE_TRANSPORT=memory, tails the poll loop
 (cd apps/mobile_app && flutter run)
 ```
@@ -261,8 +263,9 @@ supabase secrets set \
   SEAL_KEY="$(openssl rand -hex 32)" \
   BRIDGE_HMAC_SECRET="$(openssl rand -hex 32)" \
   BRIDGE_TOKEN="$(openssl rand -hex 32)" \
-  BRIDGE_BASE_URL=https://bridge.internal.yourdomain \
   ALLOWED_ORIGINS=https://<ref>.supabase.co,io.messengerx.app,com.messengerx.app
+# Do NOT set BRIDGE_BASE_URL on the $0 VM path: Realtime + the 3-second poll
+# deliver work without exposing the worker or buying a domain/certificate.
 make deploy                               # db push + the four functions
 ```
 
@@ -282,6 +285,135 @@ Two deployment traps worth naming:
   never called, and the user just sees the request expire — which looks like a Telegram
   outage. §7.3 is the playbook.
 
+### 4.1 Worker on Oracle Cloud Always Free — $0 path
+
+**Deployment status:** this is a reproducible recipe, not an already provisioned VM.
+An Oracle tenancy, a hosted Supabase project, Telegram API credentials and the
+Google OAuth configuration above still have to be created by the operator. The
+worker must run all day and keep TDLib's SQLite session files on persistent
+storage; a sleeping free web host cannot do this job.
+
+As of June 2026, [Oracle's Always Free resource list](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+allows the equivalent of **2 Ampere A1 OCPUs + 12 GB RAM**, with **200 GB combined
+boot/block volume** in the tenancy's *home region*. Labels and limits can change:
+select only **Always Free-eligible** resources, check the cost estimate before
+launching, and set a billing alert. The A1 shape may be temporarily unavailable;
+Oracle may reclaim an instance it considers idle over seven days. **$0 is a budget,
+not an uptime guarantee.** The free tier may require payment-card verification.
+
+1. Create an **Ubuntu 22.04/24.04 ARM64** `VM.Standard.A1.Flex` in your home region,
+   1 OCPU/6 GB for a small test account (expand within the current free allowance
+   if needed). Keep its default persistent boot volume (counts toward the free
+   200 GB total); assign an outbound-capable public IP. Open **only SSH from your
+   own IP** in the OCI security list and the VM firewall. There is no inbound
+   application port: the worker connects *out* to Telegram and Supabase.
+2. Install Node 22 (the repo requires ≥20.11; the current Supabase SDK needs 22),
+   Git, CMake, OpenSSL headers and a compiler. On Ubuntu, for example:
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y git curl ca-certificates cmake build-essential libssl-dev zlib1g-dev
+   # Review the vendor install script before running it as root, or use an
+   # equivalent trusted Node 22 package for your distribution.
+   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+   sudo apt-get install -y nodejs
+   node --version
+   ```
+
+3. Build the same pinned TDLib JSON library as the bridge image. Upstream has
+   **no `v1.8.43` Git tag**: pin its actual 1.8.43 commit instead. TDLib's CMake
+   install does **not** define a `lib` component; disable static installs and
+   install normally. Building on one OCPU may take a while; use one compiler job
+   on a 6 GB VM to avoid running out of memory.
+
+   ```bash
+   TDLIB_COMMIT=11406d9d6f3baa999b77fbd09f36c67749c31699
+   git init /tmp/td
+   git -C /tmp/td remote add origin https://github.com/tdlib/td.git
+   git -C /tmp/td fetch --depth 1 origin "$TDLIB_COMMIT"
+   git -C /tmp/td checkout --detach FETCH_HEAD
+   cmake -S /tmp/td -B /tmp/td/build -DCMAKE_BUILD_TYPE=Release \
+     -DTD_INSTALL_STATIC_LIBRARIES=OFF -DBUILD_TESTING=OFF
+   cmake --build /tmp/td/build --target tdjson -j 1
+   sudo cmake --install /tmp/td/build
+   sudo ldconfig
+   ldconfig -p | grep libtdjson
+   ```
+
+4. Install this repository **after the new migration and bridge code are in the
+   revision you deploy** (do not expect the unmerged upstream `main` to have
+   them). Keep source readable and session files writable by a dedicated user:
+
+   ```bash
+   sudo useradd --system --home /var/lib/messengerx-bridge --shell /usr/sbin/nologin messengerx
+   sudo install -d -o messengerx -g messengerx -m 0755 /opt/messengerx
+   sudo -u messengerx git clone https://github.com/Xodjayev-aa/massanger.git /opt/messengerx
+   cd /opt/messengerx
+   sudo -u messengerx npm ci
+   sudo -u messengerx npm run build:bridge
+   ```
+
+5. Copy `infra/messengerx-bridge.service` to `/etc/systemd/system/`. Create
+   `/etc/messengerx/bridge.env` (root-owned, mode `0600`) with the hosted project
+   URL/service-role key, Telegram `API_ID`/`API_HASH`, the **same** `SEAL_KEY`,
+   `BRIDGE_TOKEN` and `BRIDGE_HMAC_SECRET` as the functions, plus a **stable**
+   `TDLIB_DB_KEY` (e.g. generate **once** with `openssl rand -base64 32`;
+   TDLib's JSON API expects base64 bytes). Consult
+   `services/telegram_bridge/.env.example` for the exact variable names and
+   generate each secret **once**. Set these nonsecret values too:
+
+   ```ini
+   MESSENGERX_ENV=production
+   BRIDGE_TRANSPORT=koffi
+   TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so
+   BRIDGE_DATA_DIR=/var/lib/messengerx-bridge
+   BRIDGE_HEALTH_HOST=127.0.0.1
+   BRIDGE_HEALTH_PORT=8787
+   BRIDGE_WORKER_ID=oracle-free-1
+   BRIDGE_MAX_SESSIONS=4
+   ```
+
+   Do **not** put secrets in a Git-tracked file, systemd unit or shell history.
+   The unit's `StateDirectory=messengerx-bridge` creates the persistent boot-volume
+   folder at `/var/lib/messengerx-bridge` and restricts write access to it.
+   Keep the **directory and the encryption key** across restarts/upgrades; losing
+   either makes linked users reauthenticate. Use a free in-region volume backup
+   within the allowance, and an encrypted off-VM copy of the key. Never scale two
+   workers against the **same** TDLib session directory.
+
+6. Apply 00012 to hosted Supabase (`supabase db push`, §4), deploy the functions,
+   then start the worker and verify it locally on the VM:
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now messengerx-bridge
+   sudo systemctl status messengerx-bridge
+   journalctl -u messengerx-bridge -n 80 --no-pager
+   curl -fsS http://127.0.0.1:8787/healthz
+   curl -fsS http://127.0.0.1:8787/readyz
+   # Later upgrades: git pull; npm ci; npm run build:bridge; systemctl restart.
+   ```
+
+`BRIDGE_BASE_URL` is **unset** (run `supabase secrets unset BRIDGE_BASE_URL` if
+an earlier deploy configured it): Supabase Edge Functions do not need to call this VM.
+The worker uses Supabase Realtime for fast wakes (including `notify_requests`) and a
+3-second poll as the safety path. The admin port stays on loopback, so no paid
+hostname, load balancer, cert or open port 8787 is necessary. If Realtime drops,
+the poll still claims work. For an *optional* public wake endpoint, first arrange a
+free subdomain and HTTPS plus the bearer/HMAC authentication; exposing
+`/internal/wake` directly over plaintext HTTP is not the $0 shortcut to take.
+
+**Free hostname boundary:** Supabase gives the API `*.supabase.co`; a future
+web-compatible frontend can live at `*.pages.dev` / `*.github.io` without buying
+a domain (do not assume the current Flutter app's `dart:io` media paths build for
+web without adaptation). This worker needs no hostname at all. Google OAuth **Testing** (≤100 testers) is a development path,
+but publishing an external app with restricted Gmail scopes may require a verified
+site/domain, a privacy policy and Google's verification; a borrowed subdomain may
+not satisfy that, so do not promise unlimited public sign-ups for $0. The notices
+use *Telegram's* installed app on iOS — **Apple Developer membership (~$99/year)**
+is still needed for App Store distribution or native APNs; a domain is not the APNs
+fee. Nothing in this recipe signs or distributes an iOS app.
+
 ---
 
 ## 5. The Telegram bridge
@@ -299,23 +431,24 @@ read receipts and FLOOD_WAIT parking all behave as they do against the real thin
 `SIM_PHONE_CODE` accepts a fixed code so you can walk the whole flow without a phone:
 
 ```
-POST /healthz   → {"status":"ok","transport":"memory",…}
-GET  /readyz    → 200 once sessions are restored; 503 while starting
-GET  /metrics   → Prometheus text, prefix messengerx_bridge_*
-POST /internal/wake  {"user_id":"<uuid>"}   # only with Bearer + HMAC
+GET  /healthz  → {"ok":true,"transport":"memory",…}
+GET  /readyz   → 200 while the manager is running
+GET  /metrics  → Prometheus text, prefix messengerx_bridge_*
+POST /internal/wake  {"kind":"outbox","user_ids":["<uuid>"]}   # Bearer + HMAC
 ```
 
-`/internal/wake` is what `telegram-send` calls after inserting an outbox row so a
-message does not wait up to `BRIDGE_POLL_INTERVAL_MS` (default 1500 ms). Bodies over
+`/internal/wake` is an **optional** latency hint from `telegram-send` after
+inserting an outbox row; Realtime and the default 3000 ms poll make it unnecessary
+on the $0 VM path (§4.1). Bodies over
 64 KiB are refused with 413 — a wake payload is tiny on purpose. Any other path
 returns 404 with no hint of what exists.
 
 ### 5.2 Real TDLib, against your own account
 
 ```bash
-export BRIDGE_TRANSPORT=koffi        # or `websocket` with a sidecar
+export BRIDGE_TRANSPORT=koffi        # pinned libtdjson.so, no sidecar
 export TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so
-export TDLIB_DB_KEY="$(openssl rand -hex 32)"      # keep it in your secret manager
+export TDLIB_DB_KEY="$(openssl rand -base64 32)"   # generate once; keep it in your secret manager
 export TELEGRAM_API_ID=00000000
 export TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
 npm run build && npm start
@@ -325,11 +458,15 @@ npm run build && npm start
 per deployment; never reuse a bot's app id, and never put the hash in the repo — it is
 a secret despite the name `api_id` being public.)
 
-Then in the app: **Telegram → Link account**, either *Scan this QR* (TDLib
-`exportLoginToken`, rendered by `qr_flutter`, valid `TELEGRAM_QR_TIMEOUT_SECONDS`, 180 s
-by default) or a phone number, then the 5-digit code Telegram sends to your other
-device, then the 2FA password if you have one. Nothing but ciphertext crosses the
-functions; the app never sees the phone credential after submit.
+Then in the app: **Telegram → Link account**. Enter your Telegram phone number,
+then the code Telegram sends (often to another logged-in Telegram device), then
+your 2FA password if you have one. The worker currently supports **phone + code,
+not QR login**: TDLib 1.8.43 uses `requestQrCodeAuthentication` and emits a link
+in an authorization-state update, not `requestQrCode` or `exportLoginToken`.
+Legacy callers that set `useQr` receive a phone-code prompt, not a fake QR. Keep
+`BRIDGE_DATA_DIR` across worker restarts; TDLib does not have a JSON login-token
+export/import shortcut for stateless failover. With `SEAL_KEY` configured, the
+credentials reach the bridge sealed; never link a real account without it.
 
 What to check when you do this for real (the CI suite cannot):
 
@@ -337,12 +474,29 @@ What to check when you do this for real (the CI suite cannot):
    of a new Telegram message in a synced chat.
 2. A message sent from MessengerX appears in Telegram with the same text, and the app
    bubble turns single-tick → double-tick → (after you read it in Telegram) read.
-3. `tg_outbox` for that message reaches `delivered` — not stuck at `sent`. A row parked
-   because of `FLOOD_WAIT_n` shows `leased_until` in the future and retries itself.
+3. `telegram_outbox` for that message reaches `sent`. A row parked because of
+   `FLOOD_WAIT_n` shows `next_attempt_at` in the future and retries itself.
 4. Reading the chat in *Telegram* clears the MessengerX badge (the reverse of #2).
 5. Kill the worker (`^C`) and restart it: sessions are restored from `BRIDGE_DATA_DIR`,
-   the link is still valid, and nothing is double-posted (idempotency is
-   `(chat_id, source, tg_message_id)` for inbound and `dedupe_key` for outbound).
+   the link is still valid, and no old Telegram inbound row is duplicated
+   (`(chat_id, source, tg_message_id)` is the idempotency key).
+6. **Offline notices (00012):** link *both* test users' Telegram accounts, leave the
+   recipient's MessengerX app for >90 s, then send from another MessengerX user.
+   Allow the 3-second folding window plus a poll. The recipient should see one
+   `MessengerX · sender` text in **their own Saved Messages**. Send two more in
+   quick succession; they should fold into one notice with `+N more`. Check
+   `notify_requests.state = sent`, `tg_self_chat_id`, `tg_message_id` and the
+   bridge's `messengerx_bridge_notices_total` metric. A mirrored Telegram-origin
+   message already delivered by that same Telegram account must **not** add a
+   second notice. Reading, muting for 8 hours, switching push off, or reopening
+   the app before the claim must cancel a queued notice; switching previews off
+   must render a generic notice and erase queued text. While MessengerX is in
+   front, a new non-mirrored message in another unmuted thread should show a
+   brief local banner; a message in the open thread should not. Repeat on iOS
+   and Android. **Check whether your Telegram client actually displays an OS
+   notification for a self-sent Saved Messages entry:** Telegram may suppress
+   them, and this repo cannot force Telegram/Apple to buzz. Without APNs/FCM
+   this is best-effort Telegram delivery, not a native push guarantee.
 
 ### 5.3 Configuration worth knowing
 
@@ -350,10 +504,11 @@ What to check when you do this for real (the CI suite cannot):
 | --- | --- | --- |
 | `BRIDGE_MAX_SESSIONS` | 64 (max 4096) | a worker holds a few hundred TDLib clients comfortably; beyond that, shard by user id |
 | `BRIDGE_POLL_INTERVAL_MS` | 3000 | queue fallback — the Realtime wake usually wins; lower costs CPU on the getUpdates loop |
-| `BRIDGE_OUTBOX_BATCH_SIZE` | 10 (max 200) | rows claimed per tick per user |
+| `BRIDGE_OUTBOX_BATCH_SIZE` | 10 (max 200) | rows claimed per tick; also bounds the offline-notice batch (SQL caps notices at 100) |
 | `BRIDGE_OUTBOX_LEASE_SECONDS` | 180 | a crashed worker's lease expires after this; keep it above your worst media upload |
 | `BRIDGE_MIN_SEND_INTERVAL_MS` / `BRIDGE_MAX_SEND_PER_MINUTE` | 120 / 20 | Telegram's flood control; the worker parks the row instead of hammering |
-| `BRIDGE_SESSION_IDLE_SECONDS` | 600 | idle sessions retire and restart lazily, which is what makes one worker serve thousands of accounts |
+| `BRIDGE_SESSION_IDLE_SECONDS` | 600 | idle sessions retire and restart lazily; a notice reopens its recipient's session |
+| `push_telegram` / `push_preview` (profile) | true / true | two settings in the Telegram screen: Saved Messages delivery and whether sender/text appear in notices and foreground banners |
 | `MESSENGERX_ENV` | `development` | **set it to `production`**: it is what makes the bridge refuse an unsealed link payload and refuse an open admin surface (the functions default to `production`, the worker does not) |
 | `TELEGRAM_DEVICE_MODEL` | `MessengerX Bridge` | this is the label in the user's Telegram → Devices list |
 | `INGEST_MODE` | `function` | `rpc` posts through the DB directly (service-role) — only for self-hosted installs without edge runtime |
@@ -364,17 +519,18 @@ What to check when you do this for real (the CI suite cannot):
 
 ## 6. TDLib: version, image, sessions
 
-- **Pin the version.** `services/telegram_bridge/Dockerfile` builds TDLib from a tag
-  (`TDLIB_VERSION`, default `v1.8.43`) and the bridge was written against that schema.
-  TDLib's JSON interface changes between minors; an unpinned image is how a routine
-  rebuild starts failing every send. Upgrade deliberately: bump the arg, run
-  `npm run test:bridge`, then §5.2's checklist against one real account.
-- **Building locally** (macOS/Linux):
-  `git clone --depth 1 --branch v1.8.43 https://github.com/tdlib/td && cmake -S td -B b -DCMAKE_BUILD_TYPE=Release && cmake --build b --target tdjson && sudo cmake --install b --component lib`
-  then `export TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so`. On Apple Silicon set
-  `-DCMAKE_OSX_ARCHITECTURES=arm64` or you will link an x86 library into an arm64
-  process and `koffi` will fail with a confusing `dlopen` error.
-- **Session state** lives in `BRIDGE_DATA_DIR/<user_id>/` — TDLib's own encrypted
+- **Pin the version.** `services/telegram_bridge/Dockerfile` fetches TDLib's
+  *commit* `11406d9d6f3baa999b77fbd09f36c67749c31699` (version 1.8.43).
+  There is no upstream `v1.8.43` tag. The JSON API changes across versions, so
+  upgrade deliberately: verify the send options against the new `td_api.tl`, bump
+  the SHA, build the image, run `npm run test:bridge`, then §5.2's checklist
+  against a real account. The memory simulator cannot validate a real TDLib ABI.
+- **Building locally** (macOS/Linux): use the fetch + CMake steps in §4.1 with
+  `-DTD_INSTALL_STATIC_LIBRARIES=OFF`, then set
+  `TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so`. On Apple Silicon add
+  `-DCMAKE_OSX_ARCHITECTURES=arm64`; linking an x86 library into an arm64
+  process makes `koffi` fail at `dlopen`.
+- **Session state** lives in `BRIDGE_DATA_DIR/tg-<user_id>/` — TDLib's own encrypted
   SQLite, keyed by `TDLIB_DB_KEY`. That directory plus the key is the *only* thing that
   keeps users logged in to Telegram across a redeploy: back it up like TLS keys,
   restore it before scaling a shard, and treat loss as "everyone re-links" (the app
@@ -394,12 +550,27 @@ alert on:
 
 | Metric / log | Alert when | It means |
 | --- | --- | --- |
-| `…_outbox_lag_seconds` | p95 > 10 s | the poll loop is behind or parked on FLOOD_WAIT |
-| `…_outbox_parked` | > 0 for 15 min | a user is being rate-limited by Telegram; sends are waiting |
-| `…_sessions_needs_reauth` | any | the TDLib session died (revoked, migrated, DB key rotated) |
-| `…_ingest_rejected_total{reason="hmac"}` | rising | `BRIDGE_HMAC_SECRET`/clock skew mismatch between functions and bridge |
-| `…_send_failed_total{code="…400"}` | rising | media path/policy problem — usually `images`/`voice-notes` prefix (see §7.3) |
-| `GET /readyz` non-200 | 3 consecutive | the worker is not serving sessions; deploys must not proceed |
+| `messengerx_bridge_rows_last_tick` stays 0 with queued DB rows | several minutes | DB claim, Supabase key or worker poll failure |
+| `messengerx_bridge_parked_total` rises | sustained | Telegram flood wait, missing session, or retryable error (inspect `last_error`) |
+| `messengerx_bridge_notices_failed_total` rises | any | a Saved Messages notice exhausted retries or a session was revoked |
+| `messengerx_bridge_errors_total` rises | sustained | manager tick/transport failure; inspect JSON logs |
+| `GET /readyz` non-200 | 3 consecutive | worker not serving; investigate before a deploy |
+
+`/metrics` exposes totals since the current worker start, not a persisted history.
+Check `notify_requests` via a **service-role** SQL session (never the mobile app):
+
+```sql
+select state, count(*), min(next_attempt_at) as oldest_due
+from public.notify_requests group by state order by state;
+select user_id, chat_id, folded, attempts, last_error, next_attempt_at
+from public.notify_requests where state in ('queued', 'in_flight')
+order by next_attempt_at limit 20;
+```
+
+A `queued` notice waiting 3 seconds is healthy (burst folding). A repeatedly
+`in_flight` notice beyond the lease suggests a crashed worker or DB completion
+problem; the claim RPC reclaims it. Keep preview text and Telegram credentials
+out of operator logs.
 
 `/readyz` returns 503 until session restore finished, so a rolling deploy will not send
 traffic to a cold worker. `/healthz` answers even while starting — use it for liveness
@@ -500,10 +671,10 @@ yourself matching on sender+body, stop and add the id.
   bound except `telegram_inbox_events` (audit-only, no client policies). Prune it on a
   schedule if you keep the bridge for long:
   `delete from public.telegram_inbox_events where created_at < now() - interval '30 days';`
-- **Backfill**: to replay a chat's Telegram history after a mapping was lost, set
-  `sync_direction` to `backfill` for that `telegram_chats` row and let the worker walk
-  `getHistory` — inbound idempotency makes a re-run safe, so start with a generous
-  window rather than guessing exactly where it stopped.
+- **Backfill**: there is *no* `sync_direction = backfill` enum value or automated
+  historical replay. A lost mapping requires operator review and a separate
+  backfill tool; do not set an invalid direction and expect the worker to walk
+  history. The live ingest path deduplicates by `(chat_id, source, tg_message_id)`.
 
 ---
 
@@ -527,7 +698,8 @@ Rules that come from how these migrations are loaded and tested:
 5. **Anything the app streams must be added to the publication** in the same migration
    (`alter publication supabase_realtime add table …`), and must have a policy that
    filters per member — Realtime respects RLS, so a missing policy means a silent
-   stream, not a leak.
+   stream. The bridge's `notify_requests` subscription uses a service-role JWT;
+   that queue intentionally has **no client** SELECT/Realtime policies.
 6. Keep `seed.sql` to ≤ a handful of statements: `tools/sql-test/seed-check.mjs` splits
    on `/;\s*\n/` and asserts the fixture set (5 statements / 8 checks). Its job is to
    catch a seed that quietly started depending on something the migrations do not
@@ -566,16 +738,51 @@ every admin action is auditable in the same table as everything else.
 
 ---
 
-## 10. Deliberately absent
+## 10. Notifications (A + C), and what is deliberately absent
 
-Not oversights — decisions, so nobody re-litigates them at 2 a.m.:
+**A — offline Telegram Saved Messages.** Migration `00012_self_push.sql` adds
+`profiles.push_telegram/push_preview`, `telegram_accounts.self_chat_id` and an
+internal `notify_requests` queue. For each incoming *non-system* message, the
+AFTER trigger checks the recipient's app heartbeat (`last_seen_at` older than 90 s
+or null), linked Telegram account, participant mute/leave, and whether a mirrored
+Telegram message already buzzed on that person's Telegram. It folds consecutive
+messages per `(user_id, chat_id)` into one queued row, refreshed after a 3-second
+quiet window. The worker leases with `bridge_claim_notify` and checks
+`bridge_notice_owed` again immediately before `sendMessage` to the **recipient's
+own Telegram Saved Messages** (not the sender's session). Delivery caches
+`self_chat_id`, parks `FLOOD_WAIT_n` for `n+2` seconds, clears a bad chat-id cache,
+and stops after four attempts. `mark_chat_read`, muting, leaving, foreground
+heartbeats and disabling push cancel queued work; preview-off wipes queued and
+leased text. The self chat is never mirrored into MessengerX. Leases make crashes
+recoverable but, as with any Telegram send followed by a separate DB write,
+**exactly-once delivery across a worker crash cannot be promised**. If the DB
+completion fails but the *same* worker stays up, it reuses the TDLib receipt rather
+than sending a second copy. Terminal rows are pruned after 3 days by the worker's
+6-hour housekeeping loop (`prune_notify_requests`). Clients cannot read the queue.
 
-- **Bot API**: cannot read a *personal* chat history, which is what "two-way sync with
-  my Telegram" means here.
-- **GramJS as an adapter**: see §0.
-- **Push notifications**: the app reads `unread_total()` and Realtime; APNs/FCM is a
-  separate service that should not be bolted onto this runbook.
-- **End-to-end encryption**: transport security + RLS only. Media is decrypted by the
-  bridge for mirroring; that is inherent to a userbot.
-- **Server-side offline queue**: no local store in the app (§6).
-- **In-app phone sign-in**: the phone number exists only inside the link flow.
+**C — in-app banners.** `IncomingNotices` subscribes to `messages` INSERT only
+while authenticated and foregrounded. It consults the participant read/mute state,
+checks whether a Telegram-origin message already arrived on Telegram, fetches the
+latest preview preference, skips own/system messages and the open thread, folds a
+burst into one 5-second banner and dismisses it when the participant is read or
+muted (also across devices). It never schedules an OS notification. A banner
+tap **dismisses** it; there is no notice deep-link scheme. The chat list's unread
+badge and `chat_feed` are the source of truth on reconnect. The chat list dispatches
+a debounced refresh event on participant updates so the new unread state actually
+reaches its BLoC listeners. Muting from a chat's header lasts 8 hours and cancels queued offline work in the same DB transaction.
+
+**Limits / decisions:**
+
+- This is **not APNs, FCM or a background Flutter service**. Telegram may not
+  generate an OS buzz for self-sent Saved Messages on every client/device; verify
+  on real phones (§5.2). Turning on Telegram's notification permission is a
+  prerequisite, not a guarantee. Native iOS push/App Store distribution needs
+  Apple's paid developer program; it is outside the $0 scope.
+- There is **no Telegram Bot API** (it cannot read a personal chat history), and
+  **no GramJS adapter** (§0).
+- There is **no end-to-end encryption**: TLS + RLS only, and TDLib processes
+  media to mirror it. Telegram Saved Messages is stored on Telegram's servers.
+- There is **no local offline app message store** (§6). `notify_requests` is a
+  *server-side* notice queue, not a way to send messages offline from Flutter.
+- There is **no in-app phone sign-in**; the phone number exists only in the
+  Telegram link flow.

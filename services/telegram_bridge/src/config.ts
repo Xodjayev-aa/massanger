@@ -74,10 +74,12 @@ const schema = z.object({
    * plaintext message history, which matters because the bridge host also stores
    * nothing else about the user.
    */
-  databaseEncryptionKey: z.string().min(43).max(128).optional().transform((value) => value ?? undefined),
-  /** Mint a sealed login token on link so another worker can take the session over. */
-  exportLoginToken: z.coerce.boolean().default(false),
-  qrTimeoutSeconds: z.coerce.number().int().min(30).max(600).catch(180).default(180),
+  databaseEncryptionKey: z.string()
+    .refine((value) => {
+      const bytes = Buffer.from(value, 'base64');
+      return bytes.length === 32 && bytes.toString('base64') === value;
+    }, 'TDLIB_DB_KEY must be base64 encoding of exactly 32 random bytes')
+    .optional().transform((value) => value ?? undefined),
   tdVerbosity: z.coerce.number().min(0).max(10).catch(1).default(1),
   requestTimeoutMs: positiveInt(45_000),
 
@@ -189,8 +191,6 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfi
     deviceModel: source.TELEGRAM_DEVICE_MODEL,
     systemLanguageCode: source.TELEGRAM_LANGUAGE_CODE,
     databaseEncryptionKey: source.TDLIB_DB_KEY,
-    exportLoginToken: source.TELEGRAM_EXPORT_LOGIN_TOKEN === 'true',
-    qrTimeoutSeconds: source.TELEGRAM_QR_TIMEOUT_SECONDS,
     tdVerbosity: source.TD_VERBOSITY,
     requestTimeoutMs: source.TD_REQUEST_TIMEOUT_MS,
     workerId: source.BRIDGE_WORKER_ID,
@@ -217,6 +217,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfi
     throw new ConfigError(
       parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`),
     );
+  }
+  if (source.TELEGRAM_EXPORT_LOGIN_TOKEN === 'true') {
+    throw new ConfigError(['TELEGRAM_EXPORT_LOGIN_TOKEN: TDLib has no JSON login-token export for worker failover; keep BRIDGE_DATA_DIR persistent instead']);
   }
 
   const value = parsed.data as z.infer<typeof schema> & {

@@ -30,9 +30,22 @@ describe('TdLibClient over the simulator', () => {
       assert.equal(client.authorizationState, 'unknown');
       await client.request('setTdlibParameters', { api_id: 1 });
       assert.equal(client.authorizationState, 'wait_phone_number');
-      await client.request('setAuthenticationPhoneNumber', { phone_number: '+10000000000' });
+      await client.request('setAuthenticationPhoneNumber', { phone_number: '+10000000000', settings: null });
       assert.equal(client.authorizationState, 'wait_code');
       assert.equal(sim.authorizationState, 'wait_code');
+    });
+  });
+
+  it('rejects pre-1.8.43 phone flags and invented QR/login-token methods', async () => {
+    await withClient(async (client) => {
+      await client.request('setTdlibParameters', { api_id: 1 });
+      await assert.rejects(() => client.request('setAuthenticationPhoneNumber', {
+        phone_number: '+10000000000', allow_flash_call: false,
+      }), /PHONE_SETTINGS_INVALID/);
+      assert.equal(client.authorizationState, 'wait_phone_number');
+      for (const method of ['requestQrCode', 'checkAuthenticationToken', 'exportLoginToken', 'importLoginToken']) {
+        await assert.rejects(() => client.request(method), /not modelled/);
+      }
     });
   });
 
@@ -40,7 +53,7 @@ describe('TdLibClient over the simulator', () => {
     await withClient(
       async (client) => {
         await client.request('setTdlibParameters', { api_id: 1 });
-        await client.request('setAuthenticationPhoneNumber', { phone_number: '+10000000000' });
+        await client.request('setAuthenticationPhoneNumber', { phone_number: '+10000000000', settings: null });
         await assert.rejects(
           () => client.request('checkAuthenticationCode', { code: '00000' }),
           (error: unknown) => error instanceof TdLibError && /PHONE_CODE_INVALID/.test(error.message),
@@ -60,19 +73,24 @@ describe('TdLibClient over the simulator', () => {
   it('returns the sent message and echoes it back as updateNewMessage', async () => {
     await withClient(async (client, sim) => {
       await client.request('setTdlibParameters', { api_id: 1 });
-      await client.request('setAuthenticationPhoneNumber', { phone_number: '+10000000000' });
+      await client.request('setAuthenticationPhoneNumber', { phone_number: '+10000000000', settings: null });
       // The simulator flips to ready while answering the code request, which is
       // exactly TDLib's ordering: the state update precedes the response.
       await client.request('checkAuthenticationCode', { code: '12345' });
       assert.equal(client.authorizationState, 'ready');
       sim.addChat({ id: 4242, title: 'Dilnoza' });
+      await assert.rejects(() => client.request('sendMessage', {
+        chat_id: 4242,
+        options: { '@type': 'messageSendingOptions', sending_id: 12 },
+        input_message_content: { '@type': 'inputMessageText', text: { '@type': 'formattedText', text: 'bad', entities: [] } },
+      }), /MESSAGE_SEND_OPTIONS_INVALID/, 'the simulator rejects the old type that real TDLib rejects');
       const echo: Array<Record<string, unknown>> = [];
       client.on((update) => {
         if (update['@type'] === 'updateNewMessage') echo.push(update as unknown as Record<string, unknown>);
       });
       const response = await client.request('sendMessage', {
         chat_id: 4242,
-        options: { '@type': 'messageSendingOptions', sending_id: 12 },
+        options: { '@type': 'messageSendOptions', sending_id: 12 },
         input_message_content: { '@type': 'inputMessageText', text: { '@type': 'formattedText', text: 'hi', entities: [] } },
       });
       assert.equal((response.content as Record<string, unknown>)['@type'], 'inputMessageText');

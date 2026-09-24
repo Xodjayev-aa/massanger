@@ -973,6 +973,12 @@ await test('a message to an offline recipient queues exactly one notice', async 
   eq(rows[0].sender_name, 'Dilnoza Rustamova', 'the human label, not the username');
   eq(String(rows[0].sender_user_id), U.b);
   eq(await noticeCount(U.b), 0, 'the sender is never notified about their own message');
+  await become(U.a);
+  eq(await scalar(`select public.banner_silence_telegram($1)`, [rows[0].last_message_id]), false,
+     'an app-only message can show a foreground banner');
+  await become(U.other);
+  eq(await scalar(`select public.banner_silence_telegram($1)`, [rows[0].last_message_id]), true,
+     'a nonmember cannot use the banner RPC to inspect another chat');
 });
 
 await test('a burst folds into one row and keeps the newest preview', async () => {
@@ -1035,14 +1041,165 @@ await test('traffic the user\'s own Telegram delivered is not announced twice', 
   await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
               values ('${chatId}', '${U.b}', 'text', 'kelgan xabar', 'telegram', 900001)`);
   eq(await noticeCount(U.a), 0, 'mirrored Telegram traffic already buzzed on their phone');
+  const telegramMessage = await one(`select id from public.messages where tg_message_id = 900001`);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [telegramMessage.id]), true,
+     'the foreground banner is suppressed too');
 
   // Same traffic, but the recipient does not mirror this chat: now it *is* news.
+  await becomeOwner();
   await exec(`delete from public.telegram_chats where owner_user_id = '${U.a}' and chat_id = '${chatId}'`);
   await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
               values ('${chatId}', '${U.b}', 'text', 'mapped emas', 'telegram', 900002)`);
   eq(await noticeCount(U.a), 1, 'an unmapped mirror is announced');
   const [row] = await noticeRows(U.a);
   eq(row.source, 'telegram');
+});
+
+await test('an app send headed for the recipient’s Telegram does not race a Saved Messages buzz', async () => {
+  await becomeOwner();
+  await exec(`
+    delete from public.notify_requests;
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 100,
+           sync_direction = 'both' where user_id = '${U.a}';
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 200,
+           sync_direction = 'both' where user_id = '${U.b}';
+    insert into public.telegram_chats
+      (owner_user_id, tg_chat_id, tg_chat_type, chat_id, peer_user_id, sync_direction)
+    values ('${U.b}', 100, 'private', '${chatId}', 100, 'both');
+  `);
+  await azizAway();
+  await sendAsDilnoza('also forwarded to Telegram');
+  const [queued] = await noticeRows(U.a);
+  eq(!!queued, true, 'the app message can still be announced if forwarding fails');
+  const outbox = await one(`select id, tg_chat_id, state::text as state from public.telegram_outbox
+                             where message_id = $1`, [queued.last_message_id]);
+  eq(String(outbox.tg_chat_id), '100', 'the sender forwards to the recipient’s own Telegram id');
+  eq(outbox.state, 'queued');
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [queued.last_message_id]), true,
+     'a foreground banner also waits rather than racing the Telegram send');
+
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where id = $1`, [queued.id]);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'wait until the original Telegram outbox has a result');
+  await becomeOwner();
+  await exec(`update public.telegram_outbox set state = 'sent' where id = $1`, [outbox.id]);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'success means no duplicate Saved Messages notification');
+  eq(await noticeCount(U.a, 'skipped'), 1);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [queued.last_message_id]), true,
+     'a delivered original also suppresses the foreground banner');
+
+  await sendAsDilnoza('but this forward fails');
+  const pending = (await noticeRows(U.a)).find((row) => row.state === 'queued');
+  eq(!!pending, true, 'a separate queued row follows the skipped history');
+  const failedOutbox = await one(`select id from public.telegram_outbox where message_id = $1`, [pending.last_message_id]);
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where id = $1`, [pending.id]);
+  await exec(`update public.telegram_outbox set state = 'failed' where id = $1`, [failedOutbox.id]);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'a retryable failed outbox is still capable of delivering the original');
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [pending.last_message_id]), true,
+     'the banner likewise waits for the retry');
+  await becomeOwner();
+  await exec(`update public.telegram_outbox set attempts = max_attempts where id = $1`, [failedOutbox.id]);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [pending.last_message_id]), false,
+     'an exhausted forward releases the foreground fallback');
+  await becomeService();
+  const [fallback] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(!!fallback, true, 'a terminally failed forward leaves Saved Messages as a fallback');
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9', $2)`,
+                  [fallback.notify_id, fallback.preview]), true);
+  await exec(`select public.bridge_complete_notify($1, 'skipped')`, [fallback.notify_id]);
+  await becomeOwner();
+  await exec(`delete from public.telegram_chats where owner_user_id = '${U.b}' and tg_chat_id = 100`);
+});
+
+await test('a shared Telegram group suppresses a second notice even when app import is off', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  const group = await one(`insert into public.chats (kind, title, created_by)
+    values ('group', 'Shared TG group', '${U.b}') returning id`);
+  await exec(`
+    insert into public.chat_participants (chat_id, user_id, role) values
+      ('${group.id}', '${U.b}', 'owner'), ('${group.id}', '${U.a}', 'member');
+    insert into public.telegram_chats
+      (owner_user_id, tg_chat_id, tg_chat_type, chat_id, sync_direction) values
+      ('${U.b}', 90117, 'basic_group', '${group.id}', 'both'),
+      ('${U.a}', 90117, 'basic_group', '${group.id}', 'off');
+  `);
+  await azizAway();
+  await become(U.b);
+  const [sent] = await rpc('public.send_message', `'${group.id}', 'text', 'to the group', null, null, null`);
+  const outbox = await one(`select id, state::text as state from public.telegram_outbox where message_id = $1`, [sent.id]);
+  eq(outbox.state, 'queued');
+  const [waiting] = await noticeRows(U.a);
+  eq(waiting.state, 'queued');
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [sent.id]), true,
+     'the original Telegram group send is still pending');
+  await becomeOwner();
+  await exec(`update public.telegram_outbox set state = 'sent' where id = $1`, [outbox.id]);
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where id = $1`, [waiting.id]);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'Telegram already delivered the group message even with app import disabled');
+  eq(await noticeCount(U.a, 'skipped'), 1);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [sent.id]), true);
+  await becomeOwner();
+  await exec(`delete from public.telegram_chats where chat_id = '${group.id}';
+              delete from public.chats where id = '${group.id}'`);
+});
+
+await test('offline alerts remain available with account mirroring disabled', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests;
+              update public.telegram_accounts set sync_direction = 'off' where user_id = '${U.a}';
+              update public.chat_participants set unread_count = 0, muted_until = null, left_at = null
+                where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await azizAway();
+  await sendAsDilnoza('app-only with mirroring off');
+  const [queued] = await noticeRows(U.a);
+  eq(queued.state, 'queued', 'the alert switch is independent of account mirroring');
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+                where id = $1`, [queued.id]);
+  await becomeService();
+  const [leased] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(leased.notify_id, queued.id, 'the independent notice can actually be sent');
+  await exec(`select public.bridge_complete_notify($1, 'skipped')`, [leased.notify_id]);
+  await becomeOwner();
+  await exec(`update public.telegram_accounts set sync_direction = 'both' where user_id = '${U.a}'`);
+});
+
+await test('an off-mapped Telegram chat still suppresses a duplicate alert', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests;
+              insert into public.telegram_chats
+                (owner_user_id, tg_chat_id, tg_chat_type, chat_id, peer_user_id, sync_direction)
+              values ('${U.a}', ${TG_CHAT_STR}, 'private', '${chatId}', 9999, 'off')`);
+  await azizAway();
+  await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
+              values ('${chatId}', '${U.b}', 'text', 'already on Telegram', 'telegram', 900003)`);
+  eq(await noticeCount(U.a), 0, 'a mapped user already has the Telegram original');
+  const message = await one(`select id from public.messages where tg_message_id = 900003`);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [message.id]), true);
+  await becomeOwner();
+  await exec(`delete from public.telegram_chats
+               where owner_user_id = '${U.a}' and chat_id = '${chatId}'`);
 });
 
 await test('previews are a preference, and turning push off clears the queue', async () => {
@@ -1154,6 +1311,7 @@ await test('the queue is invisible to clients and unwritable by them', async () 
   await become(U.b);
   await throws(() => exec(`select count(*) from public.notify_requests`), /permission denied/);
   await throws(() => exec(`select public.bridge_claim_notify('worker-1', null, 5)`), /permission denied/);
+  await throws(() => exec(`select app.notify_should_send('${U.a}', '${U.b}')`), /permission denied/);
   // RLS filters silently rather than raising, so the assertion is "nothing changed".
   await exec(`update public.profiles set push_telegram = false where id = '${U.a}'`);
   await becomeOwner();

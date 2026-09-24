@@ -177,16 +177,16 @@ describe('planOutbound', () => {
     const content = plan.sends[0]?.content as TdObject;
     assert.equal(content['@type'], 'inputMessageVoiceNote');
     const voice = content.voice_note as TdObject;
-    assert.equal(voice.duration, 6);
-    assert.equal(voice.mime_type, 'audio/ogg');
-    const bars = decodeWaveform(voice.waveform);
+    assert.deepEqual(voice, { '@type': 'inputFileLocal', path: '/tmp/v.ogg' });
+    assert.equal(content.duration, 6);
+    const bars = decodeWaveform(content.waveform);
     assert.ok(bars && bars.length === 64, 'the client waveform is stretched to 64 bars');
     assert.ok(bars.every((value) => value >= 1 && value <= 100));
   });
 
   it('caps a voice note at Telegram’s maximum length', () => {
     const plan = planOutbound(row({ kind: 'voice' }), { localPath: '/tmp/v.ogg', mime: 'audio/ogg', durationMs: 900_000 });
-    assert.equal(((plan.sends[0]?.content as TdObject).voice_note as TdObject).duration, 300);
+    assert.equal((plan.sends[0]?.content as TdObject).duration, 300);
   });
 
   it('sends a photo with the caption attached, not as a second bubble', () => {
@@ -197,7 +197,8 @@ describe('planOutbound', () => {
     const content = plan.sends[0]?.content as TdObject;
     assert.equal(content['@type'], 'inputMessagePhoto');
     assert.equal((content.photo as TdObject).path, '/tmp/p.jpg');
-    assert.equal(content.sticker_width, 1_600);
+    assert.equal(content.width, 1_600);
+    assert.equal(content.height, 900);
     assert.equal((content.caption as TdObject).text, 'from the trip');
   });
 
@@ -210,10 +211,12 @@ describe('planOutbound', () => {
   });
 
   it('carries the reply target on the first chunk only', () => {
-    const plan = planOutbound(row({ kind: 'text', payload: { text: 'answer' } }), null, {
+    const plan = planOutbound(row({ kind: 'text', payload: { text: 'answer '.repeat(900) } }), null, {
       replyToMessageId: 9001,
     });
+    assert.ok(plan.sends.length > 1);
     assert.equal(plan.sends[0]?.replyToMessageId, '9001');
+    assert.equal(plan.sends[1]?.replyToMessageId, undefined);
   });
 });
 
@@ -332,13 +335,14 @@ describe('sending id correlation', () => {
     assert.equal(sendingIdFor(41), 41);
     assert.equal((sendOptions(41) as TdObject).sending_id, 41);
     assert.throws(() => sendingIdFor(0), /cannot be used as a TDLib sending_id/);
+    assert.throws(() => sendingIdFor(0x8000_0000), /cannot be used/, 'TDLib sending_id is int32');
     assert.throws(() => sendingIdFor(Number.MAX_SAFE_INTEGER + 1), /cannot be used/);
   });
 
   it('keeps the TDLib payload shape stable', () => {
-    const options = sendOptions(7, true);
-    assert.equal(options['@type'], 'messageSendingOptions');
-    assert.equal(options.priority, 'HIGH');
+    const options = sendOptions(7);
+    assert.equal(options['@type'], 'messageSendOptions');
+    assert.equal('priority' in options, false, 'TDLib 1.8.43 has no priority field');
     assert.equal(options.from_background, true);
   });
 });

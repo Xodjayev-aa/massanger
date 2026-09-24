@@ -12,14 +12,14 @@
  *     (`SEAL_KEY`), are decrypted here, in memory, and are never logged;
  *   • `bridge_link_progress()` clears the payload as soon as we have read it, so
  *     the ciphertext exists for exactly one hop;
- *   • an exported login token (operator opt-in, for worker failover) is sealed
- *     again before it is stored — it is a real credential, not a receipt.
+ *   • a worker must restore from its persistent TDLib database; TDLib has no
+ *     exportLoginToken/importLoginToken JSON methods for stateless failover.
  */
 
 import type { Logger } from './logging.js';
 
 import type { BridgeConfig } from './config.js';
-import { aesKeyFromSecret, openEnvelope, sealEnvelope, type LinkEnvelopePayload } from './util/envelope.js';
+import { aesKeyFromSecret, openEnvelope, type LinkEnvelopePayload } from './util/envelope.js';
 import type { LinkClaim } from './supabase.js';
 import { SupabaseBridge } from './supabase.js';
 import { TdLibClient, TdLibError, type TdObject } from './tdlib.js';
@@ -42,7 +42,7 @@ export type LinkContext = {
   onReady: () => Promise<void>;
 };
 
-type Step = 'awaiting_phone' | 'awaiting_code' | 'awaiting_password' | 'awaiting_qr' | 'done';
+type Step = 'awaiting_phone' | 'awaiting_code' | 'awaiting_password' | 'done';
 
 export async function completeLinkHandshake(ctx: LinkContext): Promise<LinkOutcome> {
   const { claim, client, db, log } = ctx;
@@ -86,13 +86,20 @@ export async function completeLinkHandshake(ctx: LinkContext): Promise<LinkOutco
           });
         }
         if (!payload.phone) {
-          return await askUser(ctx, 'awaiting_phone', 'Enter the phone number that owns this Telegram account.');
+          // Old clients can still submit `use_qr` (both inside the encrypted
+          // envelope and as the RPC's top-level flag). Never fabricate a token
+          // or block the notice queue: this worker does not yet implement the
+          // update-driven requestQrCodeAuthentication handshake.
+          const requestedQr = payload.use_qr === true || claim.payload?.use_qr === true;
+          return await askUser(ctx, 'awaiting_phone', requestedQr
+            ? 'QR linking is unavailable in this worker. Enter your Telegram phone number to get a code.'
+            : 'Enter the phone number that owns this Telegram account.');
         }
+        // TDLib 1.8.43 takes a `settings` object (or null for defaults);
+        // the old top-level flash-call flags are not part of this method.
         await client.request('setAuthenticationPhoneNumber', {
           phone_number: payload.phone,
-          allow_flash_call: false,
-          is_current_phone_number: false,
-          allow_sms_call_hash: true,
+          settings: null,
         });
         const after = await authorizationState(client, 15_000, 'wait_phone_number');
         if (after === 'wait_code') return await askUser(ctx, 'awaiting_code', 'We sent you a 5-digit code.');
@@ -125,13 +132,15 @@ export async function completeLinkHandshake(ctx: LinkContext): Promise<LinkOutco
         if (after === 'ready') return await finish(ctx);
         return await askUser(ctx, 'awaiting_password', `Telegram state: ${after}`);
       }
-      case 'wait_qr':
-      case 'scan_qr':
-      case 'wait_tcode':
-        return await runQr(ctx);
+      case 'wait_other_device_confirmation':
+        // A legacy/stale QR session cannot be resumed through the phone-code
+        // steps. Fail explicitly instead of polling nonexistent JSON methods.
+        return await progress(ctx, {
+          status: 'failed', step: 'failed', authState: 'failed',
+          error: 'Telegram is awaiting a QR scan, which this worker does not support. Restart the link by phone.',
+        });
       default:
-        // `wait_phone_call`, `wait_tcode`, …: hand the decision back to the user
-        // with TDLib's own state name so the UI can explain it.
+        // Other TDLib steps: surface the actual state instead of inventing a code.
         return await askUser(ctx, 'awaiting_code', `Telegram is waiting for: ${state}`);
     }
   } catch (error) {
@@ -142,11 +151,6 @@ export async function completeLinkHandshake(ctx: LinkContext): Promise<LinkOutco
   }
 }
 
-/**
- * TDLib is authoritative about which step it wants, and the JSON client only
- * tells us through updates. Reading the *last seen* update is what keeps this
- * resilient across TDLib versions (the state object moved a couple of times).
- */
 /**
  * TDLib is authoritative about which step it wants, and it only says so through
  * updates, so "wait a moment and read the state again" beats guessing. The state
@@ -192,7 +196,9 @@ async function ensureParameters(ctx: LinkContext): Promise<void> {
         device_model: config.deviceModel,
         system_version: `${process.platform} ${process.arch}`,
         application_version: config.applicationVersion,
-        use_storage_manager: true,
+        ...(config.databaseEncryptionKey
+          ? { database_encryption_key: config.databaseEncryptionKey }
+          : {}),
       },
       { timeoutMs: Math.max(20_000, config.requestTimeoutMs) },
     );
@@ -212,11 +218,6 @@ async function finish(ctx: LinkContext): Promise<LinkOutcome> {
   const { client, db, claim, log } = ctx;
   const me = await client.request<TdObject>('getMe');
 
-  let loginTokenEnc: string | null = null;
-  if (ctx.config.exportLoginToken) {
-    loginTokenEnc = await exportLoginToken(ctx);
-  }
-
   await ctx.onReady();
 
   const phone = String(me.phone_number ?? '');
@@ -229,7 +230,7 @@ async function finish(ctx: LinkContext): Promise<LinkOutcome> {
     displayName: [String(me.first_name ?? ''), String(me.last_name ?? '')].filter(Boolean).join(' ') || null,
     phoneCountryCode: countryCode,
     sessionRef: sessionRefFor(ctx),
-    loginTokenEnc,
+    loginTokenEnc: null,
     apiId: ctx.config.apiId,
   });
 
@@ -262,102 +263,6 @@ async function runUnlink(ctx: LinkContext): Promise<LinkOutcome> {
   return { result: 'unlinked', step: 'done', note: 'Telegram account unlinked' };
 }
 
-/**
- * QR login. TDLib ≥1.8 exposes `requestQrCode` + `checkAuthenticationToken`; on
- * older builds the request fails with a 404 and we tell the user to use the SMS
- * code instead of pretending the flow exists.
- */
-async function runQr(ctx: LinkContext): Promise<LinkOutcome> {
-  const { client, config } = ctx;
-  try {
-    const response = await client.request<TdObject>('requestQrCode', {});
-    const token = String(response.token ?? '');
-    if (token.length === 0) {
-      return await askUser(ctx, 'awaiting_qr', 'Telegram did not return a QR token.');
-    }
-
-    await ctx.db.linkProgress({
-      requestId: ctx.claim.request_id,
-      status: 'awaiting_user',
-      step: 'awaiting_qr',
-      qrCode: token,
-      note: 'Scan this with Telegram, or enter the code instead.',
-    });
-
-    const deadline = Date.now() + Math.min(config.qrTimeoutSeconds, 120) * 1000;
-    while (Date.now() < deadline) {
-      const state = lastAuthorizationState(client);
-      if (state === 'ready') return await finish(ctx);
-      const scanned = await client
-        .request('checkAuthenticationToken', { token })
-        .then(() => true)
-        .catch((error: Error) => {
-          // Still unscanned is an error in TDLib's vocabulary, not a failure.
-          if (/PENDING|NOT_FOUND_YET|not.*scanned|EXPIRED/i.test(error.message)) return false;
-          throw error;
-        });
-      if (scanned) {
-        const after = await authorizationState(client, 5_000);
-        if (after === 'ready') return await finish(ctx);
-        if (after === 'wait_password') return await askUser(ctx, 'awaiting_password', 'Now the 2FA password.');
-      }
-      await sleep(2_000);
-    }
-    client.notify('cancelAuthenticationToken', { token });
-    return await askUser(ctx, 'awaiting_qr', 'the QR code expired');
-  } catch (error) {
-    const message = (error as Error).message;
-    if (/not found|404|Unimplemented|not modelled/i.test(message)) {
-      await ctx.db.linkProgress({
-        requestId: ctx.claim.request_id,
-        status: 'awaiting_user',
-        step: 'awaiting_phone',
-        note: 'QR login needs TDLib 1.8+; use the SMS code instead.',
-        error: message.slice(0, 200),
-      });
-      return { result: 'awaiting_user', step: 'awaiting_phone', note: 'qr unavailable' };
-    }
-    return await handleAuthError(ctx, error, 'awaiting_qr');
-  }
-}
-
-/** Optional operator feature: a sealed token another worker can resume with. */
-async function exportLoginToken(ctx: LinkContext): Promise<string | null> {
-  try {
-    const exported = await ctx.client.request<TdObject>('exportLoginToken', { expires: 604_800 });
-    const token = String(exported.token ?? '');
-    if (token.length === 0) return null;
-    const key = ctx.config.sealKey ? aesKeyFromSecret(ctx.config.sealKey) : null;
-    if (!key) {
-      ctx.log.warn('TELEGRAM_EXPORT_LOGIN_TOKEN needs SEAL_KEY; storing nothing instead');
-      return null;
-    }
-    // sealEnvelope() returns an A256GCM object; the column is text, so the JSON
-    // is stored compactly and re-opened by `resumeFromLoginToken`.
-    return JSON.stringify(sealEnvelope({ access_token: token }, key));
-  } catch (error) {
-    ctx.log.debug('exportLoginToken failed (continuing without failover support)', {
-      error: (error as Error).message,
-    });
-    return null;
-  }
-}
-
-/** Used by the manager when a session has no local TDLib database. */
-export async function resumeFromLoginToken(client: TdLibClient, sealed: string, sealKey: string): Promise<boolean> {
-  try {
-    const key = aesKeyFromSecret(sealKey);
-    const payload = openEnvelope(JSON.parse(sealed) as never, key);
-    const token = payload.access_token ?? payload.code;
-    if (!token) return false;
-    await client.request('importLoginToken', { token: String(token) });
-    return true;
-  } catch (error) {
-    if (error instanceof Error && !isAbort(error)) return false;
-    return false;
-  }
-}
-
 async function askUser(ctx: LinkContext, step: Step, note: string): Promise<LinkOutcome> {
   await ctx.db.linkProgress({
     requestId: ctx.claim.request_id,
@@ -374,7 +279,6 @@ const AUTH_STATE_BY_STEP: Partial<Record<Step, string>> = {
   awaiting_phone: 'awaiting_phone',
   awaiting_code: 'awaiting_code',
   awaiting_password: 'awaiting_password',
-  awaiting_qr: 'awaiting_code',
 };
 
 async function progress(

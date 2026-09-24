@@ -12,7 +12,6 @@
  * shape as the JSON client (responses arrive after the request returns).
  */
 
-import { randomUUID } from 'node:crypto';
 import type { TdLibTransport, TdObject } from './tdlib.js';
 
 export type SimulatorOptions = {
@@ -235,6 +234,11 @@ export class TelegramSimulator implements TdLibTransport {
     try {
       switch (type) {
         case 'setTdlibParameters': {
+          if (request.database_encryption_key != null &&
+              typeof request.database_encryption_key !== 'string') {
+            fail(400, 'DATABASE_ENCRYPTION_KEY_INVALID');
+            return;
+          }
           reply({ '@type': 'ok' });
           this.#authorization = { state: 'wait_phone' };
           this.#emit({
@@ -245,7 +249,16 @@ export class TelegramSimulator implements TdLibTransport {
         }
 
         case 'setAuthenticationPhoneNumber': {
-          this.#authorization = { state: 'wait_code', phone: String(request.phone_number ?? '') };
+          if (typeof request.phone_number !== 'string' || !request.phone_number ||
+              !Object.hasOwn(request, 'settings') ||
+              (request.settings !== null &&
+                (typeof request.settings !== 'object' ||
+                 (request.settings as TdObject)['@type'] !== 'phoneNumberAuthenticationSettings')) ||
+              'allow_flash_call' in request || 'is_current_phone_number' in request) {
+            fail(400, 'PHONE_SETTINGS_INVALID');
+            return;
+          }
+          this.#authorization = { state: 'wait_code', phone: request.phone_number };
           this.#emit({
             '@type': 'updateAuthorizationState',
             authorization_state: {
@@ -296,23 +309,6 @@ export class TelegramSimulator implements TdLibTransport {
           reply({ '@type': 'ok' });
           return;
         }
-
-        case 'requestQrCode':
-          reply({ '@type': 'authExportedToken', token: randomUUID().slice(0, 11), expires: 600 });
-          return;
-
-        case 'exportLoginToken':
-          reply({
-            '@type': 'authExportedToken',
-            token: `tok-${randomUUID().slice(0, 8)}`,
-            expires: Math.floor(Date.now() / 1000) + 600,
-          });
-          return;
-
-        case 'importLoginToken':
-          this.#ready();
-          reply({ '@type': 'ok' });
-          return;
 
         case 'logOut':
           reply({ '@type': 'ok' });
@@ -368,6 +364,18 @@ export class TelegramSimulator implements TdLibTransport {
           return;
         }
 
+        case 'createPrivateChat': {
+          // Saved Messages is a private chat with the authorised account.
+          const id = Number(request.user_id);
+          if (this.#authorization.state !== 'ready' || id !== this.#myId) {
+            fail(400, 'PEER_ID_INVALID');
+            return;
+          }
+          this.addChat({ id, title: 'Saved Messages', type: 'private', peerUserId: id });
+          reply(this.#chatObject(this.#findChat(id)!));
+          return;
+        }
+
         case 'getChatHistory': {
           const from = Number(request.from_message_id ?? this.#messageId);
           reply({
@@ -402,6 +410,14 @@ export class TelegramSimulator implements TdLibTransport {
             fail(407, 'AUTH_WRITE_REQUIRED');
             return;
           }
+          // Fail if the bridge drifts from the pinned TDLib td_api.tl; the real
+          // JSON client does not accept `messageSendingOptions` or `priority`.
+          const options = request.options as TdObject | undefined;
+          if (options && (options['@type'] !== 'messageSendOptions' || 'priority' in options ||
+                          'allow_sending_without_reply' in options)) {
+            fail(400, 'MESSAGE_SEND_OPTIONS_INVALID');
+            return;
+          }
           const chatId = Number(request.chat_id);
           const id = ++this.#messageId;
           const sendingId = Number(
@@ -419,7 +435,7 @@ export class TelegramSimulator implements TdLibTransport {
             // Kept on the message as well so a test can assert the bridge correlated
             // its outbox id with what it handed TDLib as `sending_id`.
             sending_id: sendingId || null,
-            reply_to_message_id: request.reply_to_message_id ?? null,
+            reply_to_message_id: (request.reply_to as TdObject | undefined)?.message_id ?? null,
           };
           reply({ ...message, '@type': 'message' });
           // The echo arrives as a normal update, exactly like the real client, so

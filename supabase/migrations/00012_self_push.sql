@@ -205,9 +205,10 @@ as $$
           and pr.push_telegram
           -- Two missed 45 s heartbeats: the app is backgrounded or killed.
           and (pr.last_seen_at is null or pr.last_seen_at < clock_timestamp() - interval '90 seconds')
-          -- The notice travels out through this account's own session.
+          -- Sync direction controls mirroring, not this separate alert preference.
+          -- A person can stop importing Telegram chats and still ask for Saved
+          -- Messages notices about app-only conversations via the linked session.
           and ta.auth_state = 'linked'
-          and ta.sync_direction <> 'off'
      );
 $$;
 
@@ -217,9 +218,10 @@ $$;
  * phone — announcing it again is the one duplicate users notice instantly.
  */
 create or replace function app.notify_already_buzzed(
-  p_user   uuid,
-  p_chat   uuid,
-  p_source public.message_source
+  p_user    uuid,
+  p_chat    uuid,
+  p_source  public.message_source,
+  p_message uuid default null
 )
 returns boolean
 language sql
@@ -227,14 +229,63 @@ stable
 security definer
 set search_path = pg_catalog, public
 as $$
-  select p_source = 'telegram'::public.message_source
-     and exists (
-       select 1
-         from public.telegram_chats tc
-        where tc.owner_user_id = p_user
-          and tc.chat_id = p_chat
-          and tc.sync_direction in ('both', 'from_telegram')
-     );
+  select (
+    p_source = 'telegram'::public.message_source
+    and exists (
+      select 1
+        from public.telegram_chats tc
+       where tc.owner_user_id = p_user
+         and tc.chat_id = p_chat
+         -- Even a disabled mirror can still represent a Telegram group the
+         -- recipient belongs to. If it does, their Telegram already saw it.
+    )
+  ) or (
+    -- An app message can also be forwarded to this recipient's actual Telegram
+    -- account by *the sender's* outbox. If Telegram delivered that original,
+    -- Saved Messages would be a duplicate even though the source is 'app'.
+    p_source = 'app'::public.message_source and p_message is not null
+    and exists (
+      select 1 from public.telegram_outbox o
+      join public.telegram_accounts ta on ta.user_id = p_user
+      where o.message_id = p_message
+        and (
+          -- Private TDLib chat ids are the recipient's user id. In a shared
+          -- Telegram group, compare both owners' mapping of this app chat.
+          o.tg_chat_id = ta.tg_user_id
+          or exists (
+            select 1 from public.telegram_chats tc
+             where tc.owner_user_id = p_user and tc.chat_id = p_chat
+               and tc.tg_chat_id = o.tg_chat_id
+          )
+        )
+        and o.state = 'sent'
+    )
+  );
+$$;
+
+/** A failed outbox row can still retry. Do not fall back until it is terminal. */
+create or replace function app.notify_waiting_for_telegram(p_user uuid, p_chat uuid, p_message uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog, public
+as $$
+  select p_message is not null and exists (
+    select 1 from public.telegram_outbox o
+    join public.telegram_accounts ta on ta.user_id = p_user
+    where o.message_id = p_message
+      and (
+        o.tg_chat_id = ta.tg_user_id
+        or exists (
+          select 1 from public.telegram_chats tc
+           where tc.owner_user_id = p_user and tc.chat_id = p_chat
+             and tc.tg_chat_id = o.tg_chat_id
+        )
+      )
+      and (o.state in ('queued', 'in_flight')
+           or (o.state = 'failed' and o.attempts < o.max_attempts))
+  );
 $$;
 
 /** One line of context, or nothing at all when previews are off. */
@@ -281,7 +332,8 @@ create or replace function app.notify_row_owed(
   p_user uuid,
   p_chat uuid,
   p_sender uuid,
-  p_source public.message_source default 'app'
+  p_source public.message_source default 'app',
+  p_message uuid default null
 )
 returns boolean
 language sql
@@ -290,7 +342,7 @@ security definer
 set search_path = pg_catalog, public
 as $$
   select app.notify_should_send(p_user, p_sender)
-     and not app.notify_already_buzzed(p_user, p_chat, p_source)
+     and not app.notify_already_buzzed(p_user, p_chat, p_source, p_message)
      and exists (
        select 1
          from public.chat_participants cp
@@ -360,7 +412,7 @@ begin
       and cp.left_at is null
       and (cp.muted_until is null or cp.muted_until <= clock_timestamp())
       and app.notify_should_send(cp.user_id, new.sender_id)
-      and not app.notify_already_buzzed(cp.user_id, new.chat_id, new.source)
+      and not app.notify_already_buzzed(cp.user_id, new.chat_id, new.source, new.id)
   loop
     v_preview := app.notify_body_preview(new, v_part.push_preview);
 
@@ -539,6 +591,31 @@ begin
 end;
 $$;
 
+/**
+ * Foreground banners must not duplicate the user's Telegram notification either.
+ * The app cannot read the sender's outbox under RLS, so expose only this scoped
+ * yes/no projection. A missing message or a nonmember gets "silence", not a
+ * cross-user outbox oracle. Unresolved forwards also silence the banner: the
+ * unread badge remains available until Telegram succeeds or retries exhaust.
+ */
+create or replace function public.banner_silence_telegram(p_message_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog, public
+as $$
+  select coalesce((
+    select app.notify_already_buzzed(cp.user_id, m.chat_id, m.source, m.id)
+        or app.notify_waiting_for_telegram(cp.user_id, m.chat_id, m.id)
+      from public.messages m
+      join public.chat_participants cp on cp.chat_id = m.chat_id
+     where m.id = p_message_id
+       and cp.user_id = app.current_uid()
+       and cp.left_at is null
+  ), true);
+$$;
+
 -- ---------------------------------------------------------------------------
 -- 8. Bridge RPCs.
 -- ---------------------------------------------------------------------------
@@ -581,7 +658,7 @@ begin
          last_error    = 'no longer owed'
    where n.state = 'queued'
      and (p_owner is null or n.user_id = p_owner)
-     and not app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id, n.source);
+     and not app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id, n.source, n.last_message_id);
 
   update public.notify_requests n
      set state = 'failed', last_error = coalesce(n.last_error, 'retry limit reached')
@@ -609,11 +686,14 @@ begin
       and n.next_attempt_at <= clock_timestamp()
       and (p_owner is null or n.user_id = p_owner)
       and ta.auth_state = 'linked'
-      and ta.sync_direction <> 'off'
       and ta.tg_user_id is not null
       and pr.access_state = 'active'
       and pr.deleted_at is null
       and pr.push_telegram
+      -- Do not beat the app → Telegram outbox into the recipient's Telegram.
+      -- Retryable failures still wait; only exhausted failures release the
+      -- fallback. Success is skipped as a duplicate on the next sweep.
+      and not app.notify_waiting_for_telegram(n.user_id, n.chat_id, n.last_message_id)
     order by n.id
     limit least(greatest(coalesce(p_limit, 10), 1), 100)
     for update of n skip locked
@@ -669,7 +749,8 @@ as $$
     select n.state = 'in_flight'
        and n.claimed_by = p_worker
        and (p_preview is null or n.preview = p_preview)
-       and app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id, n.source)
+       and app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id, n.source, n.last_message_id)
+       and not app.notify_waiting_for_telegram(n.user_id, n.chat_id, n.last_message_id)
       from public.notify_requests n
      where n.id = p_notify_id
   ), false);
@@ -785,7 +866,32 @@ commit;
 grant all on public.notify_requests to service_role;
 revoke all on public.notify_requests from public, anon, authenticated;
 
+-- The helper functions run as their owner from triggers / service-only RPCs.
+-- Do not inherit Postgres' default PUBLIC EXECUTE on SECURITY DEFINER helpers:
+-- even a boolean about another user's presence/link state is not public data.
+revoke execute on function
+  app.notify_should_send(uuid, uuid),
+  app.notify_already_buzzed(uuid, uuid, public.message_source, uuid),
+  app.notify_waiting_for_telegram(uuid, uuid, uuid),
+  app.notify_body_preview(public.messages, boolean),
+  app.notify_row_owed(uuid, uuid, uuid, public.message_source, uuid),
+  app.queue_self_push(),
+  app.cancel_queued_notices(),
+  app.cancel_notices_on_profile(),
+  app.reset_saved_messages_on_relink()
+from public, anon, authenticated;
+grant execute on function
+  app.notify_should_send(uuid, uuid),
+  app.notify_already_buzzed(uuid, uuid, public.message_source, uuid),
+  app.notify_waiting_for_telegram(uuid, uuid, uuid),
+  app.notify_body_preview(public.messages, boolean),
+  app.notify_row_owed(uuid, uuid, uuid, public.message_source, uuid)
+to service_role;
+
+revoke execute on function public.set_push_preferences(boolean, boolean) from public, anon;
 grant execute on function public.set_push_preferences(boolean, boolean) to authenticated;
+revoke execute on function public.banner_silence_telegram(uuid) from public, anon;
+grant execute on function public.banner_silence_telegram(uuid) to authenticated;
 
 grant execute on function
   public.bridge_claim_notify(text, uuid, integer, interval),
@@ -825,6 +931,8 @@ $$;
 
 comment on function public.set_push_preferences(boolean, boolean) is
   'Offline notices: turn the Telegram push and/or the message preview on or off. Cancels queued work in the same call.';
+comment on function public.banner_silence_telegram(uuid) is
+  'Foreground banner: is the message already in (or still headed to) the caller''s Telegram? Nonmembers get true.';
 comment on function public.bridge_claim_notify(text, uuid, integer, interval) is
   'Lease offline notices for delivery; skips rows the user has since read, muted or come back online for.';
 comment on function public.bridge_notice_owed(uuid, text, text) is

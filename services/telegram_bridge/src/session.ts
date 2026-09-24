@@ -355,19 +355,29 @@ export class TelegramSession {
     }
 
     const chatId = row.tg_self_chat_id ?? row.tg_user_id;
-    if (chatId == null || !/^\d+$/.test(String(chatId))) {
+    if (chatId == null || !/^\d+$/.test(String(chatId)) ||
+        row.tg_user_id == null || !/^\d+$/.test(String(row.tg_user_id))) {
       await db.completeNotify({ notifyId: row.notify_id, state: 'failed', error: 'Saved Messages chat is unknown' });
       this.counters.notices_failed++;
       return 'failed';
     }
-    const target = String(chatId);
-    this.#selfChatIds.add(target);
+    const fallback = String(chatId);
+    this.#selfChatIds.add(fallback);
+    this.#selfChatIds.add(String(row.tg_user_id));
 
     try {
+      // TDLib can require a private chat to be created/loaded before sendMessage
+      // accepts its id. This is our own Telegram user id, *not* the sender's.
+      // The returned chat id is authoritative even if a cached value was stale.
+      const self = await this.client.request<TdObject>('createPrivateChat', {
+        user_id: String(row.tg_user_id), force: false,
+      });
+      const target = String(self.id ?? fallback);
+      this.#selfChatIds.add(target);
       await this.#pace();
       // A queue claim is not permission to send forever: an app read, mute,
       // foreground heartbeat, or preference change may have happened while we
-      // waited for Telegram's per-user rate limit.
+      // waited for chat creation or Telegram's per-user rate limit.
       if (!(await db.noticeOwed(row.notify_id, row.preview))) {
         await db.completeNotify({ notifyId: row.notify_id, state: 'skipped' });
         return 'skipped';
@@ -375,10 +385,9 @@ export class TelegramSession {
       const response = await this.client.request<TdObject>('sendMessage', {
         chat_id: target,
         options: {
-          '@type': 'messageSendingOptions',
+          '@type': 'messageSendOptions',
           disable_notification: false,
           from_background: true,
-          allow_sending_without_reply: true,
           // No sending_id: this isn't an app message and must never correlate
           // with a telegram_outbox bubble on the echo path.
         },
@@ -387,7 +396,6 @@ export class TelegramSession {
           text: { '@type': 'formattedText', text: renderSelfNotice(row), entities: [] },
           link_preview_options: { '@type': 'linkPreviewOptions', is_disabled: true },
         },
-        message_self_destruct_ttl: 0,
       });
       const actualChat = String(response.chat_id ?? target);
       this.#selfChatIds.add(actualChat);
@@ -522,10 +530,14 @@ export class TelegramSession {
     const request: Record<string, unknown> = {
       chat_id: chatId,
       options,
-      input_message_content: send.content,
-      message_self_destruct_ttl: 0,
-      ...(send.replyToMessageId ? { reply_to_message_id: send.replyToMessageId } : {}),
-      ...(send.clearDraft ? { clear_draft: true } : {}),
+      // TDLib 1.8.43 uses an InputMessageReplyTo object, not the older
+      // reply_to_message_id request field. Clear-draft belongs to text content.
+      ...(send.replyToMessageId
+        ? { reply_to: { '@type': 'inputMessageReplyToMessage', message_id: send.replyToMessageId } }
+        : {}),
+      input_message_content: send.content['@type'] === 'inputMessageText'
+        ? { ...send.content, clear_draft: !!send.clearDraft }
+        : send.content,
     };
     try {
       return await this.client.request<TdObject>('sendMessage', request);
@@ -535,7 +547,7 @@ export class TelegramSession {
       // without the reply instead of losing the message.
       if (error instanceof TdLibError && /MESSAGE_TO_REPLY_NOT_FOUND/i.test(error.message) && send.replyToMessageId) {
         this.log.info('reply target unknown on telegram; sending without the reply link');
-        const { reply_to_message_id: _dropped, ...rest } = request;
+        const { reply_to: _dropped, ...rest } = request;
         return await this.client.request<TdObject>('sendMessage', rest);
       }
       throw error;
@@ -1198,13 +1210,12 @@ export class TelegramSession {
       device_model: config.deviceModel,
       system_version: `${process.platform} ${process.arch}`,
       application_version: config.applicationVersion,
-      ignore_sensitive_content_restrictions: false,
-      use_storage_manager: true,
     };
     const databaseEncryptionKey = config.databaseEncryptionKey;
     if (databaseEncryptionKey) {
-      params.database_encryption_key = Array.from(Buffer.from(databaseEncryptionKey, 'base64'));
-      params.enable_database_encryption = true;
+      // The tdjson `bytes` type is a base64 string in JSON, not an array of
+      // byte values. A different value here makes a restored session unreadable.
+      params.database_encryption_key = databaseEncryptionKey;
     }
 
     await this.client.request('setTdlibParameters', { '@type': 'setTdlibParameters', ...params }, {

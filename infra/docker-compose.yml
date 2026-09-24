@@ -1,60 +1,43 @@
-# Local/staging wiring for the sync worker. The database itself comes from the
-# Supabase CLI (`supabase start`, or a hosted project) — this file deliberately does
-# not re-implement it: a hand-rolled Postgres would drift from supabase/config.toml
-# and produce a storage bucket layout that the migrations never created.
+# Optional local/staging container for the sync worker. The production $0 Oracle
+# recipe in docs/runbook.md uses systemd instead. The image compiles the pinned
+# TDLib JSON library in-process (koffi); no unverified sidecar image is pulled.
 #
-#   make docker-up        # bridge (+ the TDLib sidecar when BRIDGE_TRANSPORT=websocket)
+#   make docker-up
 #
-# Secrets are read from services/telegram_bridge/.env, which `make env` creates.
+# The Supabase database comes from the CLI (`supabase start`) or a hosted project.
+# Set services/telegram_bridge/.env first; when Supabase runs on the Docker host,
+# set SUPABASE_URL=http://host.docker.internal:54321 in that file. `localhost`
+# inside this container is NOT the host. Keep the named session volume.
 
 name: messengerx
 
 services:
   bridge:
     build:
-      context: ../services/telegram_bridge
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/telegram_bridge/Dockerfile
     image: messengerx/telegram-bridge:local
     restart: unless-stopped
     env_file:
       - ../services/telegram_bridge/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # Compose networking, not the host's: these two override whatever a developer
-      # has in their .env for a hosted deployment.
       BRIDGE_HEALTH_HOST: 0.0.0.0
-      BRIDGE_BASE_URL: http://bridge:8787
-      MESSENGERX_ENV: ${MESSENGERX_ENV:-staging}
-      # With a sidecar, TDLib lives in its own container; with `koffi` the bridge
-      # loads /usr/local/lib/libtdjson.so from its own image.
-      BRIDGE_TRANSPORT: ${BRIDGE_TRANSPORT:-memory}
+      MESSENGERX_ENV: ${MESSENGERX_ENV:-production}
+      BRIDGE_TRANSPORT: ${BRIDGE_TRANSPORT:-koffi}
     ports:
-      - "8787:8787"          # /healthz, /readyz, /metrics, /internal/wake
+      - "127.0.0.1:8787:8787"  # admin port stays private to the host
     volumes:
       - bridge-sessions:/var/lib/messengerx-bridge
-    depends_on:
-      - tdlib
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 30s
       timeout: 4s
       retries: 3
       start_period: 20s
-    # TDLib keeps its own encrypted SQLite per account; losing this volume means
-    # every linked user has to authenticate again from the app.
+    # Losing this volume means linked users must authenticate again.
     stop_grace_period: 45s
-
-  # Only needed when BRIDGE_TRANSPORT=websocket. The image must contain the same TDLib
-  # version the bridge was built against (see the Dockerfile's TDLIB_VERSION).
-  tdlib:
-    # Third-party image: pin the digest before using this outside a laptop.
-    image: ghcr.io/apocdev/tdlib-serve:v1.8.43
-    restart: unless-stopped
-    command: ["-d", "/var/lib/td", "-p", "8081"]
-    volumes:
-      - tdlib-data:/var/lib/td
-    expose:
-      - "8081"
 
 volumes:
   bridge-sessions:
-  tdlib-data:

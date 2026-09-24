@@ -29,11 +29,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: migrations behave (59 assertions)
+      - name: migrations behave (79 assertions)
         run: npm run test:sql
       - name: seed.sql applies and its fixtures are consistent
         run: npm run test:seed
-      - name: bridge logic (87 assertions)
+      - name: bridge logic (102 assertions)
         run: npm run test:bridge
       - name: edge functions typecheck against Deno's lib surface
         run: npm run typecheck:functions
@@ -75,7 +75,8 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
-          context: services/telegram_bridge
+          context: .
+          file: services/telegram_bridge/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max

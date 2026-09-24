@@ -1,0 +1,29 @@
+# Oracle Always Free (or another small Linux VM), installed by the runbook §4.1.
+# Runs the *real* TDLib worker. Its session database lives on the VM's persistent
+# boot/block volume, never under /tmp or inside a disposable container layer.
+[Unit]
+Description=MessengerX TDLib bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=messengerx
+Group=messengerx
+WorkingDirectory=/opt/messengerx
+EnvironmentFile=/etc/messengerx/bridge.env
+ExecStart=/usr/bin/node /opt/messengerx/services/telegram_bridge/dist/main.js
+Restart=always
+RestartSec=10
+TimeoutStopSec=45
+LimitNOFILE=8192
+StateDirectory=messengerx-bridge
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/messengerx-bridge
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

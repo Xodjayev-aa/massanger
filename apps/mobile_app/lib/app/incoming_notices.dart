@@ -109,6 +109,22 @@ class _IncomingNoticesState extends State<IncomingNotices> with WidgetsBindingOb
             if (generation == _generation) unawaited(_consider(payload.newRecord, userId, generation));
           },
         )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'chat_participants',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: userId),
+          callback: (payload) {
+            if (generation != _generation || _banner?.chatId != payload.newRecord['chat_id']) return;
+            final row = payload.newRecord;
+            final muteValue = row['muted_until'];
+            final mutedUntil = muteValue == null ? null : DateTime.tryParse('$muteValue');
+            if (row['left_at'] != null || asInt(row['unread_count']) <= 0 ||
+                (muteValue != null && (mutedUntil == null || mutedUntil.isAfter(DateTime.now())))) {
+              _hideBanner(); // a read or mute on this device (or another) cancels the visible banner
+            }
+          },
+        )
         .subscribe();
   }
 
@@ -155,19 +171,15 @@ class _IncomingNoticesState extends State<IncomingNotices> with WidgetsBindingOb
         if (mutedUntil == null || mutedUntil.isAfter(DateTime.now())) return;
       }
 
-      if (row['source'] == 'telegram') {
-        // A synced Telegram chat already buzzed in the owner's own Telegram.
-        // Suppress the local banner too, not just the offline Saved Messages send.
-        final mapping = await widget.client
-            .from('telegram_chats')
-            .select('sync_direction')
-            .eq('owner_user_id', userId)
-            .eq('chat_id', chatId)
-            .maybeSingle();
-        if (mapping != null && (mapping['sync_direction'] == 'both' || mapping['sync_direction'] == 'from_telegram')) {
-          return;
-        }
-      }
+      // A Telegram-origin message or an app message headed for this person's
+      // Telegram must not also produce an app banner. The sender's outbox is
+      // private under RLS, so this member-scoped RPC answers only "silence?".
+      // A still-retrying forward is silenced too: the unread badge is the
+      // fallback until the original send reaches a terminal result.
+      final silence = await widget.client.rpc<dynamic>(
+        'banner_silence_telegram', params: <String, Object?>{'p_message_id': id},
+      );
+      if (silence != false) return; // on uncertainty, do not buzz twice
 
       // Fetch for every banner rather than caching: a second device may just
       // have switched off previews. A read failure is content-free, never a guess.
@@ -204,7 +216,13 @@ class _IncomingNoticesState extends State<IncomingNotices> with WidgetsBindingOb
   }
 
   void _onChatOpened() {
-    if (ChatPage.openChatId.value == _banner?.chatId) _hideBanner();
+    final openId = ChatPage.openChatId.value;
+    if (_banner == null || openId != _banner!.chatId) return;
+    // ChatPage sets this in initState; wait until that frame is built before
+    // changing the ancestor banner host's state.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && ChatPage.openChatId.value == openId) _hideBanner();
+    });
   }
 
   void _hideBanner() {

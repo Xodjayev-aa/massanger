@@ -74,6 +74,14 @@ describe('telegram session', () => {
     harness = newHarness();
   });
 
+  it('hands the TDLib session its persisted base64 encryption key', async () => {
+    const key = Buffer.alloc(32, 0x22).toString('base64');
+    harness = newHarness({ TDLIB_DB_KEY: key });
+    await harness.session.start();
+    assert.equal(harness.session.state, 'awaiting_auth',
+      'the simulator rejects non-string keys like the real tdjson bytes decoder');
+  });
+
   it('walks the link handshake and reports each step to the app', async () => {
     const { config, session, rec, sim } = harness;
     await session.start();
@@ -94,6 +102,44 @@ describe('telegram session', () => {
     assert.equal(body.p_tg_username, 'messengerx_sim');
     assert.equal(body.p_api_id, config.apiId);
     assert.equal(body.p_login_token_enc, null, 'no login token is minted unless the operator asks');
+  });
+
+  it('gracefully redirects an encrypted QR request to phone authentication without blocking notices', async () => {
+    const { config, session, rec, sim } = harness;
+    await session.start();
+    const key = aesKeyFromSecret(config.sealKey ?? '');
+    const claim = linkClaim({
+      payload: { ...sealEnvelope({ use_qr: true }, key), use_qr: true } as never,
+    });
+    const result = await session.handleLinkRequest(claim);
+    assert.equal(result.result, 'awaiting_user');
+    assert.equal(result.step, 'awaiting_phone');
+    assert.match(result.note ?? '', /QR linking is unavailable/);
+    assert.equal(sim.authorizationState, 'wait_phone');
+    assert.equal(rec.find('bridge_link_progress')?.json().p_qr_code, null,
+      'do not show an invented TDLib QR token');
+
+    const phone = await session.handleLinkRequest(linkClaim({
+      step: 'awaiting_phone', payload: sealEnvelope({ phone: '+998901112233' }, key) as never,
+    }));
+    assert.equal(phone.step, 'awaiting_code');
+    const code = await session.handleLinkRequest(linkClaim({
+      step: 'awaiting_code', payload: sealEnvelope({ code: '12345' }, key) as never,
+    }));
+    assert.equal(code.result, 'ready');
+    assert.ok(rec.find('bridge_link_complete'), 'the fallback can still link the account');
+  });
+
+  it('honours the top-level legacy QR flag even when the envelope has no flag', async () => {
+    const { config, session } = harness;
+    await session.start();
+    const key = aesKeyFromSecret(config.sealKey ?? '');
+    const claim = linkClaim({
+      payload: { ...sealEnvelope({}, key), use_qr: true } as never,
+    });
+    const result = await session.handleLinkRequest(claim);
+    assert.equal(result.step, 'awaiting_phone');
+    assert.match(result.note ?? '', /QR linking is unavailable/);
   });
 
   it('never lets a sealed credential reach the database or the logs', async () => {
@@ -146,6 +192,24 @@ describe('telegram session', () => {
       'echo, inbound, and read updates in Saved Messages never reach the app');
     assert.ok(!rec.calls.some((call) => call.url.includes('bridge_mark_inbox_read') &&
       String(call.json().p_tg_chat_id) === '777001'), 'read updates in Saved Messages stay private');
+  });
+
+  it('opens Saved Messages through the recipient session if TDLib has no self chat yet', async () => {
+    const { config, session, rec, sim } = harness;
+    await session.start();
+    await linkInto(rec, config, session);
+    await assert.rejects(() => session.client.request('getChat', { chat_id: '777001' }), /CHAT_NOT_FOUND/);
+
+    rec.reply('/rpc/bridge_notice_owed', true);
+    rec.reply('/rpc/bridge_complete_notify', true);
+    const delivered = await session.deliverNotices([notifyRow({ tg_self_chat_id: '99999' })]);
+    assert.equal(delivered.sent, 1);
+    assert.equal((await session.client.request('getChat', { chat_id: '777001' })).id, 777001);
+    assert.equal(String(sim.sentMessages[0]?.chat_id), '777001',
+      'createPrivateChat returned the authoritative chat id, not the stale cached one');
+    assert.equal(rec.find('bridge_complete_notify')!.json().p_self_chat_id, '777001');
+    assert.ok(!rec.calls.some((call) => call.url.includes('bridge_resolve_chat') &&
+      String(call.json().p_tg_chat_id) === '777001'), 'self chat must not be imported');
   });
 
   it('does not send a claimed notice if it was read or muted while waiting', async () => {
