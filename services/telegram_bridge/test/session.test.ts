@@ -134,7 +134,8 @@ describe('telegram session', () => {
     assert.equal(completed.p_state, 'sent');
     assert.equal(completed.p_self_chat_id, '777001', 'cache the chat id Telegram actually returned');
     assert.ok(Number(completed.p_tg_message_id) > 0);
-    assert.ok(rec.find('bridge_notice_owed'), 'read/mute/foreground state checked at send time');
+    assert.equal(rec.find('bridge_notice_owed')!.json().p_preview, 'oxirgi xabar',
+      'the last-moment check also refuses a stale preview after a privacy change');
 
     sim.injectIncoming({ chatId: 777_001, text: 'also saved here', isOutgoing: false });
     sim.injectPeerRead(777_001, Number(sent.id));
@@ -157,6 +158,23 @@ describe('telegram session', () => {
     assert.equal(result.skipped, 1);
     assert.equal(sim.sentMessages.length, 0);
     assert.equal(rec.find('bridge_complete_notify')!.json().p_state, 'skipped');
+  });
+
+  it('replays a failed database completion without resending the Saved Messages text', async () => {
+    const { config, session, rec, sim } = harness;
+    await session.start();
+    await linkInto(rec, config, session);
+    rec.reply('/rpc/bridge_notice_owed', true);
+    rec.reply('/rpc/bridge_complete_notify', { message: 'temporary DB outage', code: '08006' }, 503);
+    const first = await session.deliverNotices([notifyRow()]);
+    assert.equal(first.sent, 1, 'Telegram did receive the notice');
+    assert.equal(sim.sentMessages.length, 1);
+
+    rec.reply('/rpc/bridge_complete_notify', true);
+    const retried = await session.deliverNotices([notifyRow({ attempts: 2 })]);
+    assert.equal(retried.skipped, 1, 'only the DB completion is retried');
+    assert.equal(sim.sentMessages.length, 1, 'never send a second bubble while the session survives');
+    assert.equal(rec.find('bridge_complete_notify')!.json().p_state, 'sent');
   });
 
   it('parks a notice on Telegram flood wait and resets a bad Saved Messages cache', async () => {

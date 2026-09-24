@@ -93,6 +93,21 @@ class ChatRepository {
     }
   }
 
+  /// The RLS policy only lets a participant update their own row. The notice
+  /// trigger cancels any queued Saved Messages delivery in the same transaction
+  /// when this is muted; the foreground banner host reads the same row.
+  Future<void> setMuted(String chatId, bool muted) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) throw const AppException('auth', 'Sign in first.');
+    try {
+      await _client.from('chat_participants').update(<String, Object?>{
+        'muted_until': muted ? DateTime.now().toUtc().add(const Duration(hours: 8)).toIso8601String() : null,
+      }).eq('user_id', userId).eq('chat_id', chatId);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
   /// Called when the thread is visible: the server only promotes `sent → delivered`
   /// for rows that belong to somebody else, so this is safe to call aggressively.
   Future<void> markDelivered(List<String> messageIds) async {

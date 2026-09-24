@@ -774,7 +774,7 @@ final class MirroredChat {
   String get directionLabel => switch (direction) {
         'off' => 'Off',
         'to_telegram' => 'App → Telegram',
-        'to_app' => 'Telegram → app',
+        'from_telegram' => 'Telegram → app',
         _ => 'Two-way',
       };
 

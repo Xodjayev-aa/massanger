@@ -111,6 +111,8 @@ export class TelegramSession {
   #chats = new Map<string, ChatInfo>();
   /** Own Telegram id and any discovered Saved Messages chat ids: never mirror these. */
   #selfChatIds = new Set<string>();
+  /** A sent notice whose DB completion failed: retry the *completion*, not TDLib. */
+  #deliveredNotices = new Map<string, { tgMessageId: string | null; selfChatId: string }>();
   #chatQueue = new KeyedQueue<void>();
   #uploaded = new Map<number, UploadedMedia>();
   #tgMessageToOutbox = new Map<string, number>();
@@ -333,6 +335,20 @@ export class TelegramSession {
       this.counters.notices_failed++;
       return 'failed';
     }
+    const alreadySent = this.#deliveredNotices.get(row.notify_id);
+    if (alreadySent) {
+      // The first send succeeded but PostgREST was unavailable for the receipt.
+      // A live session can recover the completion after the lease expires without
+      // placing a second Saved Messages bubble on the user's other devices.
+      try {
+        await db.completeNotify({ notifyId: row.notify_id, state: 'sent', ...alreadySent });
+        this.#deliveredNotices.delete(row.notify_id);
+        return 'skipped'; // the original send was already counted
+      } catch (error) {
+        this.log.warn('notice completion still unavailable', { error: (error as Error).message });
+        return 'parked';
+      }
+    }
     if (!this.ready) {
       await db.completeNotify({ notifyId: row.notify_id, state: 'queued', error: 'session not authorised', retrySeconds: 20 });
       return 'parked';
@@ -352,7 +368,7 @@ export class TelegramSession {
       // A queue claim is not permission to send forever: an app read, mute,
       // foreground heartbeat, or preference change may have happened while we
       // waited for Telegram's per-user rate limit.
-      if (!(await db.noticeOwed(row.notify_id))) {
+      if (!(await db.noticeOwed(row.notify_id, row.preview))) {
         await db.completeNotify({ notifyId: row.notify_id, state: 'skipped' });
         return 'skipped';
       }
@@ -375,16 +391,22 @@ export class TelegramSession {
       });
       const actualChat = String(response.chat_id ?? target);
       this.#selfChatIds.add(actualChat);
-      const completed = await db.completeNotify({
-        notifyId: row.notify_id,
-        state: 'sent',
-        tgMessageId: response.id == null ? null : String(response.id),
-        selfChatId: actualChat,
-      });
-      if (!completed) {
-        // Read/mute won the race while Telegram accepted the send. The database
-        // must *not* resurrect it, even though TDLib cannot unsend that message.
-        this.log.debug('notice completed after its lease was cancelled', { notify_id: row.notify_id });
+      const receipt = { tgMessageId: response.id == null ? null : String(response.id), selfChatId: actualChat };
+      if (this.#deliveredNotices.size > 1_000) this.#deliveredNotices.delete(this.#deliveredNotices.keys().next().value ?? '');
+      this.#deliveredNotices.set(row.notify_id, receipt);
+      try {
+        const completed = await db.completeNotify({ notifyId: row.notify_id, state: 'sent', ...receipt });
+        this.#deliveredNotices.delete(row.notify_id);
+        if (!completed) {
+          // Read/mute won the race while Telegram accepted the send. The database
+          // must *not* resurrect it, even though TDLib cannot unsend that message.
+          this.log.debug('notice completed after its lease was cancelled', { notify_id: row.notify_id });
+        }
+      } catch (error) {
+        // Do NOT pass this to the usual failure handler: it would requeue a send
+        // that TDLib already accepted. The in-memory receipt above lets the same
+        // session finish it when the DB lease is reclaimed.
+        this.log.warn('notice sent; will retry its database completion', { error: (error as Error).message });
       }
       this.counters.notices++;
       return 'sent';

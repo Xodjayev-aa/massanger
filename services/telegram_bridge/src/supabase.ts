@@ -323,10 +323,11 @@ export class SupabaseBridge {
   }
 
   /** Re-check read/mute/presence immediately before passing a claimed notice to TDLib. */
-  noticeOwed(notifyId: string): Promise<boolean> {
+  noticeOwed(notifyId: string, claimedPreview: string): Promise<boolean> {
     return this.rpc<boolean>('bridge_notice_owed', {
       p_notify_id: notifyId,
       p_worker: this.config.workerId,
+      p_preview: claimedPreview,
     }, { shape: 'scalar' });
   }
 

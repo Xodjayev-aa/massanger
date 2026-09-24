@@ -1112,6 +1112,41 @@ await test('turning push off cancels an already-leased notice', async () => {
   eq(await scalar(`select state::text from public.notify_requests where id = $1`, [leased.notify_id]), 'skipped');
 });
 
+await test('turning previews off also protects a notice already leased by the worker', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('private before claim');
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  const [leased] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(leased.preview, 'private before claim');
+
+  await become(U.a);
+  await query(`select public.set_push_preferences(null, false)`);
+  await becomeService();
+  eq(await scalar(`select preview from public.notify_requests where id = $1`, [leased.notify_id]), '',
+     'the database erases text even after the worker has claimed it');
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9', $2)`,
+                  [leased.notify_id, leased.preview]), false,
+     'a worker holding the old preview cannot send it');
+  eq(await scalar(`select public.bridge_complete_notify($1, 'skipped')`, [leased.notify_id]), true);
+});
+
+await test('deleting an unsent message drops its queued preview', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('deleted before the quiet window');
+  const [queued] = await noticeRows(U.a);
+  eq(queued.preview, 'deleted before the quiet window');
+  await become(U.b);
+  await rpc('public.delete_message', `'${queued.last_message_id}'`);
+  eq(await noticeCount(U.a), 0, 'retracted text never goes into Saved Messages');
+});
+
 await test('the queue is invisible to clients and unwritable by them', async () => {
   await becomeOwner();
   // The previous case turned Aziz's push off; the RLS assertion needs a known start.
@@ -1171,6 +1206,14 @@ await test('the bridge claims a notice, targets Saved Messages and caches the ch
      'the discovered chat id is cached for the next notice');
 });
 
+await test('relinking a different Telegram user never reuses the old Saved Messages id', async () => {
+  await becomeService();
+  eq(await scalar(`select self_chat_id::text from public.telegram_accounts where user_id = '${U.a}'`), '777001');
+  await exec(`update public.telegram_accounts set tg_user_id = 101 where user_id = '${U.a}'`);
+  eq(await scalar(`select self_chat_id from public.telegram_accounts where user_id = '${U.a}'`), null,
+     'the previous Telegram identity’s Saved Messages chat is erased');
+});
+
 await test('a parked notice retries, a revoked session fails it, and history is pruned', async () => {
   await becomeOwner();
   await exec(`delete from public.notify_requests`);
@@ -1204,6 +1247,21 @@ await test('a parked notice retries, a revoked session fails it, and history is 
                       clock_timestamp() - interval '4 days', clock_timestamp() - interval '4 days')`);
   eq(Number(await scalar(`select public.prune_notify_requests()`)), 1, 'terminal rows past the window are pruned');
   eq(await scalar(`select count(*)::int from public.notify_requests`), 1, 'recent history is kept');
+});
+
+await test('retry exhaustion stops a permanently parked notice', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('fourth failure');
+  await becomeOwner();
+  await exec(`update public.notify_requests set attempts = max_attempts,
+                next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'a fifth delivery attempt is never leased');
+  eq(await noticeCount(U.a, 'failed'), 1);
 });
 
 // ---------------------------------------------------------------------------

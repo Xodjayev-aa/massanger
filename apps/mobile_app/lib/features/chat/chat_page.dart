@@ -22,6 +22,10 @@ import 'message_bubble.dart';
 class ChatPage extends StatelessWidget {
   const ChatPage({super.key, required this.chatId});
 
+  /// The open thread never gets a foreground banner: the bubble itself is the
+  /// notification. Cleared when its scaffold is disposed by the router.
+  static final ValueNotifier<String?> openChatId = ValueNotifier<String?>(null);
+
   final String chatId;
 
   @override
@@ -33,13 +37,15 @@ class ChatPage extends StatelessWidget {
         auth: context.read<AuthBloc>(),
         player: sl<VoicePlayer>(),
       )..add(ChatOpened(chatId)),
-      child: const _ChatScaffold(),
+      child: _ChatScaffold(chatId: chatId),
     );
   }
 }
 
 class _ChatScaffold extends StatefulWidget {
-  const _ChatScaffold();
+  const _ChatScaffold({required this.chatId});
+
+  final String chatId;
 
   @override
   State<_ChatScaffold> createState() => _ChatScaffoldState();
@@ -52,10 +58,18 @@ class _ChatScaffoldState extends State<_ChatScaffold> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    ChatPage.openChatId.value = widget.chatId;
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatScaffold oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.chatId != oldWidget.chatId) ChatPage.openChatId.value = widget.chatId;
   }
 
   @override
   void dispose() {
+    if (ChatPage.openChatId.value == widget.chatId) ChatPage.openChatId.value = null;
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     super.dispose();
@@ -75,6 +89,8 @@ class _ChatScaffoldState extends State<_ChatScaffold> {
     return BlocBuilder<ChatBloc, ChatState>(
       builder: (context, state) {
         final title = _titleOf(context, state);
+        final muted = context.select<ChatsBloc, bool>((chats) =>
+            chats.state.chats.any((chat) => chat.chatId == widget.chatId && chat.isMuted));
         return Scaffold(
           appBar: AppBar(
             titleSpacing: 6,
@@ -96,6 +112,11 @@ class _ChatScaffoldState extends State<_ChatScaffold> {
               ],
             ),
             actions: <Widget>[
+              IconButton(
+                tooltip: muted ? 'Unmute this chat' : 'Mute this chat for 8 hours',
+                icon: Icon(muted ? Icons.notifications_off_rounded : Icons.notifications_active_outlined),
+                onPressed: () => _setMuted(!muted),
+              ),
               IconButton(
                 tooltip: 'Search in this chat',
                 icon: const Icon(Icons.search_rounded),
@@ -129,6 +150,21 @@ class _ChatScaffoldState extends State<_ChatScaffold> {
         );
       },
     );
+  }
+
+  Future<void> _setMuted(bool muted) async {
+    try {
+      await sl<ChatRepository>().setMuted(widget.chatId, muted);
+      if (!mounted) return;
+      await context.read<ChatsBloc>().refresh();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(muted ? 'Muted for 8 hours.' : 'Chat unmuted.')),
+      );
+    } catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error is AppException ? error.message : 'Could not change the chat mute.')),
+      );
+    }
   }
 
   /// The chat list already knows the display name, so the header uses it rather than

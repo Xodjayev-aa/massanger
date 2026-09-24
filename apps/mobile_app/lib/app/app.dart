@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show SupabaseClient;
 
 import '../data/account_repository.dart';
 import '../data/chat_repository.dart';
@@ -10,6 +11,7 @@ import '../data/telegram_repository.dart';
 import '../features/auth/auth_bloc.dart';
 import '../features/chats/chats_bloc.dart';
 import 'di.dart';
+import 'incoming_notices.dart';
 import 'router.dart';
 import 'theme.dart';
 
@@ -106,10 +108,16 @@ class _MessengerXAppState extends State<MessengerXApp> with WidgetsBindingObserv
             darkTheme: AppTheme.dark(),
             themeMode: ThemeMode.system,
             routerConfig: _router,
-            builder: (context, child) => _coldStartCover(
-              context,
-              child,
-              covered: state.status == AppStatus.unknown,
+            builder: (context, child) => IncomingNotices(
+              auth: _auth,
+              chats: _chats,
+              telegram: sl<TelegramRepository>(),
+              client: sl<SupabaseClient>(),
+              child: _coldStartCover(
+                context,
+                child,
+                covered: state.status == AppStatus.unknown,
+              ),
             ),
           );
         },

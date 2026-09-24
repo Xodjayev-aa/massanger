@@ -75,6 +75,34 @@ class TelegramRepository {
     }
   }
 
+  /// These preferences live on the signed-in profile, not the Telegram session:
+  /// preview privacy also applies to banners while the app is in the foreground.
+  Future<PushPreferences> pushPreferences() async {
+    try {
+      final row = await _client
+          .from('profiles')
+          .select('push_telegram, push_preview')
+          .eq('id', _currentUid())
+          .single();
+      return PushPreferences.fromMap(Map<String, dynamic>.from(row));
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  Future<PushPreferences> setPushPreferences({bool? telegram, bool? preview}) async {
+    try {
+      final raw = await _client.rpc<dynamic>('set_push_preferences', params: <String, Object?>{
+        'p_push_telegram': telegram,
+        'p_push_preview': preview,
+      });
+      if (raw is! Map) throw const AppException('database', 'Could not save your notification preferences.');
+      return PushPreferences.fromMap(Map<String, dynamic>.from(raw));
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
   Future<void> setChatSync({required String chatId, required String direction}) async {
     try {
       await _client.rpc<dynamic>('telegram_set_chat_sync', params: <String, Object?>{
@@ -151,6 +179,20 @@ class TelegramRepository {
       throw AppException.wrap(error, stack);
     }
   }
+}
+
+/// Shared by the Telegram settings panel and the foreground banner host.
+/// Previews fail closed (false) if a response lacks the field.
+class PushPreferences {
+  const PushPreferences({required this.telegram, required this.preview});
+
+  final bool telegram;
+  final bool preview;
+
+  factory PushPreferences.fromMap(Map<String, dynamic> row) => PushPreferences(
+        telegram: row['push_telegram'] == true,
+        preview: row['push_preview'] == true,
+      );
 }
 
 class LinkResult {

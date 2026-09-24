@@ -94,6 +94,27 @@ begin
 end;
 $$;
 
+-- A re-link can change the Telegram identity behind this MessengerX account.
+-- Never reuse a Saved Messages chat id that belonged to the *old* identity.
+create or replace function app.reset_saved_messages_on_relink()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public
+as $$
+begin
+  if new.tg_user_id is distinct from old.tg_user_id
+     or (new.auth_state = 'unlinked' and old.auth_state <> 'unlinked') then
+    new.self_chat_id := null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists telegram_accounts_reset_saved_chat on public.telegram_accounts;
+create trigger telegram_accounts_reset_saved_chat
+  before update on public.telegram_accounts
+  for each row execute function app.reset_saved_messages_on_relink();
+
 -- ---------------------------------------------------------------------------
 -- 3. notify_requests — one *open* row per (user, chat), plus a short terminal
 -- history for the bridge's own debugging. Reuses `outbox_state` so the queue
@@ -296,8 +317,19 @@ declare
   v_part    record;
   v_preview text;
 begin
+  if tg_op = 'UPDATE' and old.deleted_at is null and new.deleted_at is not null then
+    -- A message retracted before the quiet window closes must not appear in
+    -- Saved Messages. Dropping its folded row is safer than leaking its preview.
+    delete from public.notify_requests n
+     where n.last_message_id = new.id and n.state = 'queued';
+    update public.notify_requests n
+       set state = 'skipped', last_error = 'message retracted'
+     where n.last_message_id = new.id and n.state = 'in_flight';
+    return new;
+  end if;
+
   if new.kind = 'system' or new.deleted_at is not null then
-    return coalesce(new, old);
+    return new;
   end if;
 
   if tg_op = 'UPDATE' then
@@ -422,6 +454,17 @@ security definer
 set search_path = pg_catalog, public
 as $$
 begin
+  if new.push_preview is false and old.push_preview is true then
+    -- Also scrub a *leased* row. The worker passes its originally claimed
+    -- preview to bridge_notice_owed, which will now return false rather than
+    -- sending stale text after a privacy change.
+    update public.notify_requests n
+       set preview = ''
+     where n.user_id = new.id
+       and n.state in ('queued', 'in_flight')
+       and n.preview <> '';
+  end if;
+
   if (new.push_telegram is false and old.push_telegram is true)
      or (new.access_state <> 'active' and old.access_state = 'active')
      or (new.deleted_at is not null and old.deleted_at is null)
@@ -481,7 +524,7 @@ begin
   if p_push_preview is false then
     update public.notify_requests n
        set preview = ''
-     where n.user_id = v_uid and n.state = 'queued' and n.preview <> '';
+     where n.user_id = v_uid and n.state in ('queued', 'in_flight') and n.preview <> '';
   end if;
 
   if p_push_telegram is false then
@@ -539,6 +582,11 @@ begin
    where n.state = 'queued'
      and (p_owner is null or n.user_id = p_owner)
      and not app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id, n.source);
+
+  update public.notify_requests n
+     set state = 'failed', last_error = coalesce(n.last_error, 'retry limit reached')
+   where n.state = 'queued' and n.attempts >= n.max_attempts
+     and (p_owner is null or n.user_id = p_owner);
 
   update public.notify_requests n
      set state = case when n.attempts >= n.max_attempts then 'failed' else 'queued'
@@ -610,7 +658,7 @@ $$;
  * before TDLib: a recipient may have opened, read, muted, unlinked, or disabled
  * push after the claim. A missing/revoked lease is always false.
  */
-create or replace function public.bridge_notice_owed(p_notify_id uuid, p_worker text)
+create or replace function public.bridge_notice_owed(p_notify_id uuid, p_worker text, p_preview text default null)
 returns boolean
 language sql
 stable
@@ -620,6 +668,7 @@ as $$
   select coalesce((
     select n.state = 'in_flight'
        and n.claimed_by = p_worker
+       and (p_preview is null or n.preview = p_preview)
        and app.notify_row_owed(n.user_id, n.chat_id, n.sender_user_id, n.source)
       from public.notify_requests n
      where n.id = p_notify_id
@@ -740,7 +789,7 @@ grant execute on function public.set_push_preferences(boolean, boolean) to authe
 
 grant execute on function
   public.bridge_claim_notify(text, uuid, integer, interval),
-  public.bridge_notice_owed(uuid, text)
+  public.bridge_notice_owed(uuid, text, text)
 to service_role;
 grant execute on function
   public.bridge_complete_notify(uuid, public.outbox_state, bigint, bigint, boolean, text, interval),
@@ -750,7 +799,7 @@ to service_role;
 
 revoke execute on function
   public.bridge_claim_notify(text, uuid, integer, interval),
-  public.bridge_notice_owed(uuid, text),
+  public.bridge_notice_owed(uuid, text, text),
   public.bridge_complete_notify(uuid, public.outbox_state, bigint, bigint, boolean, text, interval),
   public.bridge_fail_notify(uuid, text),
   public.prune_notify_requests(interval)
@@ -778,8 +827,8 @@ comment on function public.set_push_preferences(boolean, boolean) is
   'Offline notices: turn the Telegram push and/or the message preview on or off. Cancels queued work in the same call.';
 comment on function public.bridge_claim_notify(text, uuid, integer, interval) is
   'Lease offline notices for delivery; skips rows the user has since read, muted or come back online for.';
-comment on function public.bridge_notice_owed(uuid, text) is
-  'Last-moment read, mute and presence check on a worker-leased notice before sending to Telegram.';
+comment on function public.bridge_notice_owed(uuid, text, text) is
+  'Last-moment read, mute, presence and preview-privacy check on a worker-leased notice before sending to Telegram.';
 comment on function public.bridge_complete_notify(uuid, public.outbox_state, bigint, bigint, boolean, text, interval) is
   'Report one notice delivery (sent / requeue / failed) and cache the Saved Messages chat id Telegram reported.';
 comment on function public.bridge_fail_notify(uuid, text) is
