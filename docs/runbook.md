@@ -33,8 +33,9 @@ npm run check                         # PGlite migrations/RLS, seed, edge config
 bash tools/verify-client.sh           # requires Flutter SDK, analyzer, tests, placeholder release web build
 ```
 
-The GitHub CI checks Flutter with a placeholder URL/key; it **does not** talk to
-hosted Supabase, Google, Telegram or a physical phone. Review the source and
+GitHub CI checks Flutter web and Android debug compilation with a placeholder
+URL/key; it **does not** talk to hosted Supabase, Google, Telegram, iOS/Xcode
+or a physical phone. Review the source and
 migrations before granting a real service-role key. Use a new staging project
 before production. No one has verified the real TDLib binary or its runtime
 memory/storage demands in this environment.
@@ -179,14 +180,15 @@ cannot send as each user or retain their private chats.
 - **Web:** the Pages PWA can be installed on modern phones through the browser
   after the real HTTPS site and Auth setup are working. Test install/offline
   behavior separately; no native store listing is implied.
-- **Android:** platform project files must be reviewed for microphone permission,
-  `com.messengerx.app://login-callback` intent filter, `applicationId` and
-  minimum SDK, then a **real-config** release APK must be built and installed on
-  devices. Manage a private, durable release signing key before distributing
-  updates. A placeholder CI build is not an installable production APK;
-  sideloading is free but has browser/OS warnings. Publishing through Google
-  Play may require its registration fee.
-- **iOS native:** requires a Mac/Xcode for compiling and real-device testing.
+- **Android:** the tracked project includes microphone/Internet permission,
+  `com.messengerx.app://login-callback`, an aligned application ID and API 23+.
+  CI attempts a placeholder-config **debug** build. For a public binary,
+  provision a protected release signing key, configure Gradle, build a
+  **real-config signed** APK/AAB and test OAuth, media and Telegram on devices.
+  CI's debug build is not that release. Sideloading is free but has OS warnings;
+  publishing through Google Play may require its registration fee.
+- **iOS native:** the tracked project includes an OAuth URL scheme and media
+  usage descriptions, but still needs a Mac/Xcode for compiling and device tests.
   Public App Store/TestFlight distribution normally requires the paid Apple
   Developer Program, incompatible with a strict $0 requirement. On iOS,
   use the **PWA** for the $0 option rather than claiming a public native build.

@@ -28,6 +28,8 @@ help:
 		'bridge-test build and run the bridge test-suite' \
 		'sql-test    run the Postgres behaviour suite (PGlite, no Docker)' \
 		'app         flutter run the mobile app against the local stack' \
+		'build-android  DEBUG APK with local config; not a signed public release' \
+		'build-ios  unsigned iOS compile; needs Xcode/Mac and is not a release' \
 		'test        SQL + seed + bridge + flutter tests' \
 		'check       everything CI checks: tests, typechecks, analyze, format' \
 		'fmt         prettier + dart format' \
@@ -98,11 +100,13 @@ app:
 
 .PHONY: build-ios
 build-ios:
-	$(Q)cd $(APP_DIR) && $(FLUTTER) build ios --release --no-codesign
+	$(Q)echo 'iOS unsigned compile only; requires Mac/Xcode and is not installable.'
+	$(Q)cd $(APP_DIR) && $(FLUTTER) build ios --release --no-codesign --dart-define-from-file=../../.messengerx/app.json
 
 .PHONY: build-android
 build-android:
-	$(Q)cd $(APP_DIR) && $(FLUTTER) build apk --release
+	$(Q)echo 'Android DEBUG only; release signing and device verification are not configured.'
+	$(Q)cd $(APP_DIR) && $(FLUTTER) build apk --debug --dart-define-from-file=../../.messengerx/app.json
 
 # ── verification ──────────────────────────────────────────────────────────────
 .PHONY: test

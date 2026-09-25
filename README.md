@@ -16,7 +16,7 @@ publicly deployed service**.
 | TDLib phone/code/2FA connection | Exists **after** MessengerX sign-in. Requires a durable worker, a real Telegram API ID/hash and encrypted persistent session storage. |
 | Chat with Telegram users | Existing mirrors open in-app; starting a **new** private conversation by an exact public `@username` has an owner-scoped worker queue and simulated tests. No phone-number search/contact import and no real Telegram integration test yet. |
 | Notifications | A + C: user's own Telegram Saved Messages for offline folded alerts (mute/read/duplicate suppression), plus local banners while the app is open. No FCM/APNs or promised notice tap-through. |
-| Android/iOS binaries | Not distributed or device-tested. iOS web PWA can be installed without an App Store account; native iOS public distribution generally requires a paid developer membership. |
+| Android/iOS binaries | Native project sources, OAuth callbacks, permissions and icons are tracked; CI checks a placeholder-config Android debug build. No signed release or device test. iOS PWA is the $0 install path. |
 | Hosted database, public site, native worker | **Not provisioned.** SQL/RLS tests are not proof of live security, backup or uptime. |
 
 **$0 constraints:** GitHub Pages (`*.github.io`) can host the static website and
@@ -31,7 +31,7 @@ always-on personal computer is assumed.
 ## Map of the repository
 
 ```text
-apps/mobile_app/            Flutter UI, web scaffold, Android/iOS project sources when reviewed
+apps/mobile_app/            Flutter UI, web PWA and reviewed Android/iOS platform source
 supabase/migrations/        SQL schema, RLS, RPCs, storage policies and queues
 supabase/functions/         Deno edge functions: link, send, ingest, legacy access status
 services/telegram_bridge/  TDLib worker, simulated transport and tests
@@ -49,8 +49,9 @@ npm run check           # SQL migrations/RLS + seed + edge config + bridge simul
 bash tools/verify-client.sh   # requires a local Flutter SDK; analyze, test, web build
 ```
 
-The [CI workflow](.github/workflows/ci.yml) runs the Flutter tests and a
-placeholder-config web release build. A green CI run cannot verify real OAuth,
+The [CI workflow](.github/workflows/ci.yml) runs Flutter tests, a
+placeholder-config web release build and an Android **debug** compile check.
+A green CI run cannot verify real OAuth,
 Supabase RLS on hosted Postgres, Telegram's MTProto servers, Android/iOS device
 permissions or a running worker.
 

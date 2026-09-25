@@ -1,0 +1,43 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace = "com.messengerx.app"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_1_8
+    }
+
+    defaultConfig {
+        // The OAuth redirect is com.messengerx.app://login-callback. An app ID
+        // collision must be resolved deliberately across this file and Supabase.
+        applicationId = "com.messengerx.app"
+        // Audio recording and the supported Supabase Flutter plugins need API 23+.
+        minSdk = 23
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    buildTypes {
+        release {
+            // Intentionally unsigned: never distribute a debug-signed release.
+            // Configure a protected keystore outside Git before publishing an APK.
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}

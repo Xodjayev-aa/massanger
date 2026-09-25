@@ -1,9 +1,10 @@
 # MessengerX Flutter client
 
-One Flutter source tree for the web PWA and planned Android/iOS builds. The web
-scaffold is tracked under `web/`; native `android/` and `ios/` projects are **not
-tracked or distributed yet**. CI generates native scaffolds temporarily for
-analysis but has not produced a reviewed, signed, device-tested app. This code
+One Flutter source tree for the web PWA and planned Android/iOS builds. Web,
+Android and iOS platform source is tracked. The native projects include an OAuth
+callback scheme, microphone/photo permissions and MessengerX icons, but there
+is **no signed, device-tested, publicly distributed native app**. CI builds
+Android with placeholder config for a compile check, not a release. This code
 uses Supabase Auth/Postgres/RLS, Storage and Edge Functions; a separate durable
 TDLib worker is needed for Telegram chat. See the [launch runbook](../../docs/runbook.md)
 for what must be provisioned before a public website or native app works.
@@ -44,29 +45,28 @@ Google and Telegram identities; linking identities needs its own secure design.
 
 ## Native projects: not ready to distribute
 
-If generating locally, use the same identity as CI so files can be reviewed:
+The tracked Android project uses `applicationId`/namespace `com.messengerx.app`,
+API 23+, `INTERNET` + `RECORD_AUDIO`, and an exact `VIEW`/`BROWSABLE` OAuth
+callback for `com.messengerx.app://login-callback`. The tracked iOS project
+uses bundle ID `com.messengerx.app`, microphone/photo usage descriptions and
+`CFBundleURLTypes`. Both leave Flutter's built-in route deep-link handler off so
+Supabase Flutter can consume OAuth callbacks. **Do not run `flutter create .`
+over the reviewed files** or blindly overwrite these settings.
 
-```bash
-flutter create --platforms=android,ios --org com.messengerx \
-  --project-name messengerx_app .
-```
+Before distribution, test the OAuth callback, voice and photo permissions, and
+real-config messages on physical devices. The Android *release* configuration
+is intentionally **unsigned** rather than debug-signed; the operator must
+store a durable release signing key privately, configure Gradle signing, then
+build and test a signed APK/AAB. CI's placeholder Android **debug** build is
+not a production binary. For iOS, compile and test with Xcode on a Mac; public
+native distribution generally needs paid Apple Developer membership. For a $0
+iOS install, use the HTTPS PWA instead.
 
-Before distributing, review and **track** the generated platform files, align
-the Android application ID and iOS bundle ID with your chosen identifiers, and
-wire these permissions/callbacks in the platform projects:
-
-- Android: `INTERNET`, `RECORD_AUDIO`, a `VIEW`/`BROWSABLE` intent filter for
-  `com.messengerx.app://login-callback`, and the recording plugin's required
-  minimum SDK. Test the callback on an actual device and use a protected,
-  durable signing key for updates.
-- iOS: `NSMicrophoneUsageDescription`, `NSPhotoLibraryUsageDescription`, and
-  `CFBundleURLTypes` for `com.messengerx.app`. Compile and test on a Mac with
-  Xcode. Native public iOS distribution generally requires a paid Apple
-  Developer Program membership; a web PWA is the $0 install option.
-
-The native scheme must also be listed in Supabase Auth's production redirect
-allowlist **only after** those platform handlers exist. A generated scaffold is
-not proof that callbacks, photo/voice permissions or signed releases work.
+Allow `com.messengerx.app://login-callback` in hosted Supabase Auth only for
+native builds with this scheme that you have actually tested. The app ID may
+need to change if it conflicts with an existing publisher: update both native
+projects, the callback scheme and Auth allowlist together. Platform source is
+not proof that device-level behavior or signing works.
 
 ## Checks and behavior
 
