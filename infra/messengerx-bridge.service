@@ -1,6 +1,7 @@
-# Oracle Always Free (or another small Linux VM), installed by the runbook §4.1.
-# Runs the *real* TDLib worker. Its session database lives on the VM's persistent
-# boot/block volume, never under /tmp or inside a disposable container layer.
+# Optional service for an operator-provisioned Linux host; no $0 always-on host
+# with durable private storage has been verified. Runs the *real* TDLib worker.
+# Its session database must live on persistent private storage, not /tmp or a
+# disposable container layer.
 [Unit]
 Description=MessengerX TDLib bridge
 After=network-online.target

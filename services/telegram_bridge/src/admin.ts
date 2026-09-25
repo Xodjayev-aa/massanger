@@ -171,7 +171,7 @@ async function wake(request: IncomingMessage, response: ServerResponse, ctx: Rou
 function authorize(request: IncomingMessage, body: string, config: BridgeConfig): boolean {
   if (!config.bridgeToken && !config.bridgeHmacSecret) {
     // Explicitly insecure, and only reachable when MESSENGERX_ENV=development.
-    return config.messengerxEnv !== 'production';
+    return config.messengerxEnv === 'development';
   }
 
   const bearer = (singleHeader(request.headers.authorization) ?? '').replace(/^Bearer\s+/i, '');

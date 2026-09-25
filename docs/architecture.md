@@ -9,7 +9,7 @@ something. The operational side (provisioning, incidents) is in
 ```
 apps/mobile_app          Flutter, flutter_bloc + go_router + get_it
 supabase/migrations      the whole data model, RLS, RPCs, triggers, storage, realtime
-supabase/functions       4 edge functions (Deno): age gate, link, send, ingest
+supabase/functions       Deno: read-only legacy access state, link, send, ingest
 services/telegram_bridge long-lived Node worker: TDLib sessions, outbox, Saved Messages notices, ingest
 docs/ infra/ Makefile    runbook, compose wiring, task entry points
 tools/                   typecheck configs + the PGlite suites
@@ -91,7 +91,7 @@ for unread/mute, suppresses already-delivered Telegram-source traffic, fetches
 cover anything missed. A banner tap dismisses; no notice deep link is wired.
 Telegram itself may suppress an OS notification for a self-sent Saved Messages
 entry: this architecture delivers *content* to Telegram, **not** an assured iOS
-or Android system push. See [the device smoke test](runbook.md#52-real-tdlib-against-your-own-account).
+or Android system push. See [the device smoke test](runbook.md#5-personal-tdlib-bridge-and-a--c-notifications).
 
 ## Delivery states
 
@@ -115,12 +115,15 @@ in both directions only when the account's preferences allow it
 
 ## Trust and identity
 
-- **Auth is Google-only** in the client. `signInWithOAuth` hands the app a
-  `provider_token`, which goes to `account-age-gate`; the gate resolves the Google
-  account's creation date (Gmail `users.getProfile`, Drive `about` as fallback), and
-  writes `profiles.access_state`. The app renders the state; it never decides it. The
-  rule is `MIN_ACCOUNT_AGE_DAYS = 366`, with `MAX_ELIGIBILITY_ATTEMPTS = 5` failures
-  cached for `ELIGIBILITY_CACHE_DAYS = 30`.
+- **Auth identities** are Google OAuth or a gated `custom:telegram` OIDC option.
+  Telegram OIDC is enabled only after its hosted issuer/callback is configured;
+  it uses Telegram-app approval (optional consent for a verified phone claim),
+  **not** TDLib phone/code sign-in. Supabase validates the provider's ID token
+  and issues the user session; no Gmail/Drive scope or unverifiable Google
+  account-age check remains. Migration `00013` retires the old age gate without
+  undoing moderated bans. Migration `00015` prevents labeling an OIDC identity's
+  email as Google-verified. A separate phone/code *identity* option is still
+  unimplemented, and Google/Telegram identities are never implicitly merged.
 - **Navigation is gated on `access_state`**, in the router, from a single refresh
   listenable — a `restricted` account can read its own profile and nothing else.
 - **Telegram credentials are sealed per request.** The app calls `telegram-link`
@@ -130,6 +133,13 @@ in both directions only when the account's preferences allow it
   write-once and the expiry within 15 minutes. The direct tables
   (`telegram_link_requests`, `telegram_accounts` credentials) have no client policies at
   all: a wrong `select` from the app is a `42501`, not a partial read.
+- **New Telegram contacts** use migration `00016`: an active linked account may
+  enqueue at most five exact public `@username` lookups per minute. A server-only
+  queue gives its own request state to the caller. The bridge resolves the name
+  in *that owner's* TDLib session, rejects groups, channels, Saved Messages and
+  mismatched identities, maps a private chat, then completes a lease. Clients
+  never supply a numeric peer or Telegram chat ID and cannot forge a mapping.
+  This path is tested against the simulator, **not live MTProto**.
 - **Storage is partitioned by ownership**: `avatars/<uid>/…` (public read, so the app
   uses `getPublicUrl`), `images/<chat>/…` and `voice-notes/<chat>/…` (signed URLs only,
   policy checks `folder(1) = chat_id` and the caller is a member).
@@ -169,14 +179,13 @@ is the only global.
 
 | Suite | Runs | Covers |
 | --- | --- | --- |
-| `npm run test:sql` | PGlite, no Docker | 79 assertions: RLS, RPCs, notice queue folding, read/mute/privacy, retries |
-| `npm run test:seed` | PGlite | seed applies in 5 statements and the fixtures stay consistent |
-| `npm run test:bridge` | `node --test`, memory transport | 102 assertions: auth, sends, notices/self-chat isolation, flood wait, media, ingest, admin HTTP |
-| `npm run typecheck:functions` | `tsc` + `tools/typecheck/deno-shims.d.ts` | the Deno functions against the same lib surface |
-| `flutter test` | `flutter_test`, requires Flutter SDK | media jsonb contract, timestamps/bigints, waveform, `AppEnv` startup and notification preference/direction parsing; not run in this sandbox |
-| `flutter analyze` | analyzer, requires Flutter SDK | strict casts/inference/raw types, `avoid_print` and `unawaited_futures` as errors; not run in this sandbox |
+| `npm run test:sql` | PGlite, no Docker | 86+ assertions: RLS, RPCs, Telegram lookup and notice queues, media, privacy, retries |
+| `npm run test:seed` | PGlite | seed applies and the fixtures stay consistent |
+| `npm run test:functions` | Node with a Deno env stub | production CORS/sealing and trust settings fail closed |
+| `npm run test:bridge` | memory TDLib simulator | 110 assertions: auth, chats, notices, lookups, flood waits, media, ingest |
+| `npm run typecheck:functions` | `tsc` and Deno shims | edge functions typecheck; not a hosted runtime test |
+| Flutter CI | hosted Linux runner | analyzer, widget tests, placeholder-config release web build |
 
-There is no test that talks to Telegram, and that is the design: everything up to the
-TDLib boundary is deterministic, and the boundary itself is one interface
-(`TdLibTransport`) whose real implementations are verified by the checklist in
-[runbook.md §5.2](runbook.md).
+No automated test connects to Telegram's real servers or a hosted Supabase
+project. The TDLib transport and native app permissions require the real-device
+smoke test in [runbook.md](runbook.md#7-gate-for-saying-ready).

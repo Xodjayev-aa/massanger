@@ -205,6 +205,22 @@ describe('telegram session', () => {
     assert.match(result.note ?? '', /QR linking is unavailable/);
   });
 
+  it('refuses a legacy plaintext login request on a hosted worker', async () => {
+    const { config, session, rec, sim } = harness;
+    // Change the running simulator's policy, not loadConfig: its production
+    // startup correctly disallows the memory transport and temp session path.
+    config.messengerxEnv = 'production';
+    await session.start();
+    const result = await session.handleLinkRequest(linkClaim({
+      payload: { alg: 'plain', data: { phone: '+998901112233' } } as never,
+    }));
+    assert.equal(result.result, 'failed');
+    assert.match(result.error ?? '', /unsealed link payload/);
+    assert.equal(sim.authorizationState, 'wait_phone', 'no credentials reached TDLib');
+    const serialized = rec.calls.map((call) => call.body).join('\n');
+    assert.ok(!serialized.includes('+998901112233'), 'no plaintext reaches the database');
+  });
+
   it('never lets a sealed credential reach the database or the logs', async () => {
     const { config, session, rec } = harness;
     await session.start();

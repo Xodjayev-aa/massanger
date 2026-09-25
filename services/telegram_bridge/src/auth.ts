@@ -50,6 +50,12 @@ export async function completeLinkHandshake(ctx: LinkContext): Promise<LinkOutco
 
   let payload: LinkEnvelopePayload = {};
   try {
+    // SQL accepts plain envelopes for explicit local development. A hosted
+    // worker must never decrypt a plaintext phone, code or 2FA password, even
+    // if an older edge deployment wrote such a row before the guard was set.
+    if (claim.kind !== 'unlink' && ctx.config.messengerxEnv !== 'development' && claim.payload?.alg === 'plain') {
+      throw new Error('unsealed link payload refused by hosted worker');
+    }
     payload = openEnvelope(claim.payload, key);
   } catch (error) {
     const message = (error as Error).message;

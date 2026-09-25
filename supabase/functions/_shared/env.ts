@@ -26,7 +26,7 @@ export type Env = Readonly<{
   ingestMaxEvents: number;
   clockSkewSeconds: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
-  environment: 'local' | 'staging' | 'production';
+  environment: 'development' | 'local' | 'staging' | 'production';
 }>;
 
 const str = (name: string, fallback?: string): string | null => {
@@ -57,8 +57,13 @@ const list = (name: string, fallback: string[] = []): string[] => {
 };
 
 export function readEnv(): Env {
-  const environment = (str('MESSENGERX_ENV', 'production') ?? 'production') as Env['environment'];
-  return {
+  // An accidental MESSENGERX_ENV=prod must not disable hosted safety checks.
+  const selected = str('MESSENGERX_ENV', 'production');
+  if (selected !== 'production' && selected !== 'staging' && selected !== 'local' && selected !== 'development') {
+    throw new HttpError('misconfigured', 'MESSENGERX_ENV must be production, staging, local or development');
+  }
+  const environment: Env['environment'] = selected;
+  const env: Env = {
     supabaseUrl: (str('SUPABASE_URL') ?? 'http://host.docker.internal:54321').replace(/\/+$/, ''),
     serviceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
     anonKey: required('SUPABASE_ANON_KEY'),
@@ -76,6 +81,26 @@ export function readEnv(): Env {
     logLevel: (str('LOG_LEVEL', 'info') ?? 'info') as Env['logLevel'],
     environment,
   };
+  if (environment === 'production' || environment === 'staging') {
+    if (!env.supabaseUrl.startsWith('https://')) {
+      throw new HttpError('misconfigured', `${environment} SUPABASE_URL must use HTTPS`);
+    }
+    if (!sealingAvailable(env) || !env.bridgeToken || env.bridgeToken.length < 32 ||
+        !env.bridgeHmacSecret || env.bridgeHmacSecret.length < 32) {
+      throw new HttpError('misconfigured', `${environment} requires SEAL_KEY, BRIDGE_TOKEN and BRIDGE_HMAC_SECRET (independent random secrets of at least 32 characters)`);
+    }
+    if (env.allowedOrigins.length === 0 || env.allowedOrigins.some((raw) => {
+      try {
+        const url = new URL(raw);
+        return url.protocol !== 'https:' || url.origin !== raw;
+      } catch {
+        return true;
+      }
+    })) {
+      throw new HttpError('misconfigured', `${environment} ALLOWED_ORIGINS must list exact HTTPS origins, never *`);
+    }
+  }
+  return env;
 }
 
 /** True when the deployment is configured for end-to-end sealed payloads. */

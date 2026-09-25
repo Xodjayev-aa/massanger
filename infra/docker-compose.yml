@@ -1,13 +1,15 @@
-# Optional local/staging container for the sync worker. The production $0 Oracle
-# recipe in docs/runbook.md uses systemd instead. The image compiles the pinned
-# TDLib JSON library in-process (koffi); no unverified sidecar image is pulled.
+# Optional container on an operator-provisioned host. No $0 durable host has
+# been verified. The image compiles the pinned TDLib JSON library in-process
+# (koffi); no unverified sidecar image is pulled.
 #
 #   make docker-up
 #
 # The Supabase database comes from the CLI (`supabase start`) or a hosted project.
 # Set services/telegram_bridge/.env first; when Supabase runs on the Docker host,
-# set SUPABASE_URL=http://host.docker.internal:54321 in that file. `localhost`
-# inside this container is NOT the host. Keep the named session volume.
+# set SUPABASE_URL=http://host.docker.internal:54321 and MESSENGERX_ENV=development
+# in that file for LOCAL TESTS ONLY (hosted workers refuse HTTP and temporary
+# session paths). `localhost` inside this container is NOT the host. Keep the
+# named session volume for a real worker.
 
 name: messengerx
 

@@ -52,8 +52,7 @@ env:
 		'SUPABASE_PROJECT_REF=' \
 		'SUPABASE_DB_PASSWORD=' \
 		'# supabase/config.toml reads these with env() for the Google provider in Auth.' \
-		'# Same web OAuth client as GOOGLE_WEB_CLIENT_ID / GOOGLE_CLIENT_SECRET in' \
-		'# supabase/functions/.env.local: one client, two consumers.' \
+		'# Google OAuth web client for local Supabase Auth (no Gmail/Drive scopes).' \
 		'GOOGLE_OAUTH_CLIENT_ID=' \
 		'GOOGLE_OAUTH_CLIENT_SECRET=' > $(ENV_LOCAL)
 	$(Q)test -f $(ROOT)/.messengerx/app.json || mkdir -p $(ROOT)/.messengerx && cp $(ROOT)/apps/mobile_app/env/app.example.json $(ROOT)/.messengerx/app.json
@@ -82,7 +81,7 @@ link: $(ENV_LOCAL)
 # ── services ─────────────────────────────────────────────────────────────────
 .PHONY: bridge
 bridge: $(BRIDGE_ENV)
-	$(Q)cd $(BRIDGE_DIR) && BRIDGE_TRANSPORT=$${BRIDGE_TRANSPORT:-memory} npm run dev
+	$(Q)cd $(BRIDGE_DIR) && BRIDGE_TRANSPORT=$${BRIDGE_TRANSPORT:-memory} MESSENGERX_ENV=$${MESSENGERX_ENV:-development} npm run dev
 
 .PHONY: bridge-test
 bridge-test:

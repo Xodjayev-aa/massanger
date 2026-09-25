@@ -1,8 +1,8 @@
 # TDLib bridge worker. Build with the monorepo as the context, not this directory:
 #   docker build -f services/telegram_bridge/Dockerfile -t messengerx/telegram-bridge .
 # The root lockfile owns npm workspaces; there is intentionally no second lockfile
-# next to this Dockerfile. Both Node and TDLib inherit the host platform (arm64 on
-# Oracle Ampere A1), so an x86-only sidecar is never silently pulled in.
+# next to this Dockerfile. Both Node and TDLib target the image's platform
+# (arm64 or x86_64), so an x86-only sidecar is never silently pulled in.
 
 FROM debian:bookworm-slim AS tdlib
 # Upstream has no v1.8.43 Git tag. This is the real 1.8.43 version bump commit;

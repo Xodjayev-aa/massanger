@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import os from 'node:os';
+import path from 'node:path';
 
 const booleanish = z
   .union([z.boolean(), z.string()])
@@ -129,7 +130,8 @@ const schema = z.object({
             .filter((entry) => entry.length > 0)
         : undefined,
     ),
-  messengerxEnv: z.enum(['development', 'staging', 'production']).catch('development').default('development'),
+  // Never turn a typo (or missing label) into an insecure development worker.
+  messengerxEnv: z.enum(['development', 'staging', 'production']).default('production'),
   logLevel: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).catch('info').default('info'),
   gracefulShutdownMs: positiveInt(15_000),
 });
@@ -226,6 +228,22 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfi
     ingestFunctionUrl?: string;
     mediaTempDir?: string;
   };
+  if (value.messengerxEnv === 'production' || value.messengerxEnv === 'staging') {
+    const issues: string[] = [];
+    if (!value.supabaseUrl.startsWith('https://')) issues.push('SUPABASE_URL: hosted workers require HTTPS');
+    if (!value.bridgeToken || value.bridgeToken.length < 32 || !value.bridgeHmacSecret || value.bridgeHmacSecret.length < 32) {
+      issues.push('BRIDGE_TOKEN and BRIDGE_HMAC_SECRET: hosted workers need independent random values of at least 32 characters');
+    }
+    if (!value.sealKey || value.sealKey.length < 32) issues.push('SEAL_KEY: hosted workers need the same 32-byte key as the functions');
+    if (!value.databaseEncryptionKey) issues.push('TDLIB_DB_KEY: hosted workers need an encrypted, restorable session database');
+    if (!source.BRIDGE_DATA_DIR || !path.isAbsolute(value.dataDir) ||
+        path.resolve(value.dataDir) === os.tmpdir() || path.resolve(value.dataDir).startsWith(`${os.tmpdir()}/`)) {
+      issues.push('BRIDGE_DATA_DIR: set a persistent absolute path outside the system temp directory');
+    }
+    if (value.transport === 'memory') issues.push('BRIDGE_TRANSPORT: hosted workers cannot use the memory simulator');
+    if (value.ingestMode !== 'function') issues.push('INGEST_MODE: hosted workers must use signed telegram-ingest');
+    if (issues.length > 0) throw new ConfigError(issues);
+  }
   return {
     ...value,
     ingestEndpoint:
