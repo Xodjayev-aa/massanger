@@ -155,22 +155,24 @@ cmd_build() {
   fi
   need_node
   prepare_flutter
-  local defines
-  defines=$(mktemp)
-  chmod 600 "$defines"
-  trap 'rm -f "$defines"' EXIT
-  local node_args=( "$config_js" write-defines --out "$defines" )
+  # Global so the EXIT trap can still see it after this function returns.
+  # A local would be unset by then, and `set -u` would fail the build after
+  # Flutter had already succeeded.
+  MX_DEFINES=$(mktemp)
+  chmod 600 "$MX_DEFINES"
+  trap 'rm -f "${MX_DEFINES:-}"' EXIT
+  local node_args=( "$config_js" write-defines --out "$MX_DEFINES" )
   if [[ "$placeholder" == true ]]; then
     node_args+=(--placeholder)
   fi
   node "${node_args[@]}"
-  chmod 600 "$defines"
+  chmod 600 "$MX_DEFINES"
   (
     cd -- "$app_dir"
     flutter build web --release \
       --base-href=/ \
       --pwa-strategy=offline-first \
-      --dart-define-from-file="$defines"
+      --dart-define-from-file="$MX_DEFINES"
   )
   node "$config_js" verify-output --dir "$app_dir/build/web"
   printf 'Flutter web release is at %s (base href /, service worker present).\n' "$app_dir/build/web"
