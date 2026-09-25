@@ -63,7 +63,7 @@ class _TelegramView extends StatelessWidget {
                   const _SectionTitle('Notifications'),
                   _PreferenceRow(
                     title: 'Offline alerts in Telegram',
-                    subtitle: 'When you are away, send folded notices to your own Saved Messages. Link Telegram to enable.',
+                    subtitle: 'A durable worker can fold offline notices into your own Saved Messages. This website host is not that worker, so delivery is not available yet.',
                     value: state.pushPreferences?.telegram ?? false,
                     onChanged: account.isLinked && !state.busy && state.pushPreferences != null
                         ? (value) => context.read<TelegramCubit>().setPushPreferences(telegram: value)
@@ -163,6 +163,13 @@ class _ConnectionCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(account.headline, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Text(
+              'The website host is not a Telegram worker. Linking, chatting with real Telegram users, and '
+              'offline Saved Messages notices stay unavailable until a separate always-on worker with persistent '
+              'storage is running. Phone/code here is not MessengerX identity sign-in.',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
             if (account.note != null) ...<Widget>[
               const SizedBox(height: 4),
               Text(account.note!, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),

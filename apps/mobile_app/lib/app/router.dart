@@ -56,11 +56,16 @@ GoRouter buildRouter(AuthBloc auth, Listenable refresh) {
           return location == Routes.gate ? null : Routes.gate;
         case AppStatus.ready:
           // Pushed back out of the gate/sign-in screens once access is granted.
-          if (location == Routes.signIn || location == Routes.gate) return Routes.chats;
+          // `/` is the OAuth return and the PWA start URL; it is not a chat.
+          if (location == Routes.signIn || location == Routes.gate || location == '/') return Routes.chats;
           return null;
       }
     },
     routes: <RouteBase>[
+      // Site root has to be a real route. Vercel rewrites `/` and nested paths
+      // to index.html; without this, an OAuth return to the origin hits the
+      // error page before the session redirect runs.
+      GoRoute(path: '/', builder: (context, state) => const _BootSplash()),
       GoRoute(path: Routes.signIn, builder: (context, state) => const SignInPage()),
       GoRoute(path: Routes.gate, builder: (context, state) => const GatePage()),
       GoRoute(path: Routes.search, builder: (context, state) => const SearchPage()),
@@ -89,4 +94,15 @@ GoRouter buildRouter(AuthBloc auth, Listenable refresh) {
       body: Center(child: Text('Nothing here: ${state.uri}')),
     ),
   );
+}
+
+/// Shown while the session is still unknown, including the moment Google
+/// returns to the site root. The router leaves this screen once auth resolves.
+class _BootSplash extends StatelessWidget {
+  const _BootSplash();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
 }

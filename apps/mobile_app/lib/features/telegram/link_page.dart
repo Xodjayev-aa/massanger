@@ -67,6 +67,14 @@ class _LinkView extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
+                  Text(
+                    'This step sends a phone number, login code and optional 2FA password to a durable TDLib worker. '
+                    'The free website host is not that worker. Until one is running with persistent storage, linking '
+                    'will not finish, real Telegram chats will not sync, and offline Saved Messages notices will not '
+                    'be sent. This is not MessengerX identity sign-in.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 16),
                   _Steps(prompt: state.prompt),
                   const SizedBox(height: 24),
                   switch (state.prompt) {

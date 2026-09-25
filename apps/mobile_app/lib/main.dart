@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app/app.dart';
 import 'app/di.dart';
 import 'core/env.dart';
+import 'core/url_strategy.dart';
 
 /// Entry point.
 ///
@@ -16,6 +17,11 @@ import 'core/env.dart';
 /// screen, so `main` reports it instead.
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Path URLs (/chats/...) must be on before the router reads the browser
+  // location, so a static host can rewrite a nested reload to index.html and
+  // still open the same screen. Supabase.initialize below must finish the
+  // OAuth code exchange before runApp leaves the site-root callback URL.
+  configureAppUrlStrategy();
 
   const env = AppEnv.fromBuild;
   FlutterError.onError = (details) {

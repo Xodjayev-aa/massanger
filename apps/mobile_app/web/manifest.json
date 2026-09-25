@@ -1,15 +1,17 @@
 {
   "name": "MessengerX",
   "short_name": "MessengerX",
-  "description": "Private chats and Telegram mirrors on your devices.",
-  "start_url": ".",
-  "scope": ".",
+  "description": "MessengerX chats. Telegram sync is not included in this website.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#F3F5FA",
   "theme_color": "#2446AA",
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

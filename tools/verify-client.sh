@@ -43,6 +43,10 @@ if ! command -v flutter >/dev/null 2>&1; then
   printf 'Flutter SDK is not on PATH. Install Flutter >=3.24 and rerun on the target machine.\n' >&2
   exit 127
 fi
+if ! command -v node >/dev/null 2>&1; then
+  printf 'Node.js is not on PATH. The web build script needs it to assemble public dart-defines.\n' >&2
+  exit 127
+fi
 if [[ "$fix" == true ]] && ! command -v dart >/dev/null 2>&1; then
   printf 'The Dart SDK is not on PATH (required for --fix). Add Flutter/bin to PATH.\n' >&2
   exit 127
@@ -81,9 +85,7 @@ if [[ "$fix" == true ]]; then
 fi
 run_step analyze flutter analyze --no-fatal-infos
 run_step test flutter test --reporter expanded
-run_step web-build flutter build web --release \
-  --dart-define=SUPABASE_URL=https://example.supabase.co \
-  --dart-define=SUPABASE_ANON_KEY=ci-placeholder-not-a-live-project
+run_step web-build bash tool/vercel_build.sh build --placeholder
 printf '\nAll Flutter verification steps passed (the placeholder web build is not a live deployment). Logs: %s\n' "$log_dir"
 if [[ "$fix" == true ]]; then
   printf 'Review git diff (dart fix/format modified files) before committing.\n'

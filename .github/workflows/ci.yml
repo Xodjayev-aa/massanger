@@ -94,14 +94,17 @@ jobs:
           jq -n --arg sha "$HEAD_SHA" --rawfile log apps/mobile_app/flutter-test.log \
             '{name:"Flutter test diagnostics",head_sha:$sha,status:"completed",conclusion:"failure",output:{title:"Flutter tests failed",summary:"Test diagnostics (last 60000 characters)",text:($log[-60000:])}}' \
             | gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id
-      - name: compile installable web site
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: pinned Flutter Linux SDK archive is published
+        run: curl --fail --location --retry 3 --retry-delay 2 --output /dev/null --silent --show-error --range 0-64 "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.5-stable.tar.xz"
+      - name: compile installable web site at /
         id: web
         working-directory: apps/mobile_app
-        run: >-
-          flutter build web --release
-          --dart-define=SUPABASE_URL=https://example.supabase.co
-          --dart-define=SUPABASE_ANON_KEY=ci-placeholder-not-a-live-project
-          2>&1 | tee flutter-web.log
+        run: |
+          set -o pipefail
+          bash tool/vercel_build.sh build --placeholder 2>&1 | tee flutter-web.log
       - name: publish web-build diagnostics on failure
         if: ${{ failure() && steps.web.outcome == 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         env:
@@ -129,57 +132,9 @@ jobs:
           jq -n --arg sha "$HEAD_SHA" --rawfile log apps/mobile_app/flutter-android.log \
             '{name:"Android build diagnostics",head_sha:$sha,status:"completed",conclusion:"failure",output:{title:"Placeholder Android debug build failed",summary:"Diagnostics (last 60000 characters)",text:($log[-60000:])}}' \
             | gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id
-  # Optional public site on GitHub Pages (free repo subpath). This job is never
-  # triggered by PRs or a push. The operator must provision a real hosted
-  # Supabase project + worker, enable Pages from Actions and explicitly opt in
-  # via repository variables before running the workflow manually.
-  pages:
-    name: deploy public PWA (opt-in)
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/main' &&
-          vars.LAUNCH_APPROVED == 'true' &&
-          vars.SUPABASE_URL != '' && vars.SUPABASE_ANON_KEY != '' }}
-    needs: [server, app]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.24.5
-      - run: flutter pub get
-        working-directory: apps/mobile_app
-      - name: build real website under the repository base path
-        working-directory: apps/mobile_app
-        env:
-          PUBLIC_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          PUBLIC_SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
-          TELEGRAM_OIDC_ENABLED: ${{ vars.TELEGRAM_OIDC_ENABLED }}
-        run: |
-          flutter build web --release --base-href=/massanger/ \
-            --dart-define="SUPABASE_URL=$PUBLIC_SUPABASE_URL" \
-            --dart-define="SUPABASE_ANON_KEY=$PUBLIC_SUPABASE_ANON_KEY" \
-            --dart-define="WEB_REDIRECT_URL=https://xodjayev-aa.github.io/massanger/" \
-            --dart-define="TELEGRAM_OIDC_ENABLED=${TELEGRAM_OIDC_ENABLED:-false}"
-          # Pages has no SPA rewrite; the 404 copy lets browser reloads of
-          # /massanger/chats/... load the client router rather than an HTML error.
-          cp build/web/index.html build/web/404.html
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: apps/mobile_app/build/web
-      - name: deploy website
-        id: deployment
-        uses: actions/deploy-pages@v4
+  # The public site is a Vercel Hobby static deploy at /, not GitHub Pages.
+  # Connecting the repo and the dashboard steps live in docs/vercel.md. This
+  # workflow does not publish the site and does not receive Supabase secrets.
 
   # Build the complete image on trusted PRs as well as main. It is never
   # published: a compiled TDLib library is not a hosted, persistent worker.

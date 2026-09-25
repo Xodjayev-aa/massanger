@@ -95,10 +95,19 @@ class _SignInPageState extends State<SignInPage> {
                   ],
                   const SizedBox(height: 24),
                   Text(
-                    'Google does not grant access to Gmail or Drive. Telegram sign-in opens Telegram for approval; '
-                    'it is not phone/code sign-in and does not connect your TDLib session. '
-                    'The phone/code wizard for chats comes next. The two sign-in methods create separate '
-                    'MessengerX accounts unless the identities are securely linked.',
+                    'Google does not grant access to Gmail or Drive and does not prove account age. '
+                    'Telegram approval is not phone/code sign-in. Standalone in-app phone/code identity '
+                    'sign-in is not implemented. The two methods create separate MessengerX accounts unless '
+                    'the identities are securely linked.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'This free website only hosts the app. Chatting with real Telegram users, and offline '
+                    'Saved Messages notices, need a separate always-on worker with persistent storage. That '
+                    'worker is not included. There is no signed public Android installer. On iPhone, use '
+                    'Add to Home Screen — the PWA is the free install, not an App Store app.',
                     style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     textAlign: TextAlign.center,
                   ),

@@ -23,11 +23,12 @@ help:
 		'db-start    supabase start (needs Docker) — local API, Storage, Realtime, Studio' \
 		'db-stop     supabase stop' \
 		'db-reset    drop the local database and re-apply migrations + seed.sql' \
-		'link        supabase link to the project named in supabase/.env, then db push' \
+		'link        supabase link only — does not push migrations' \
 		'bridge      run the TDLib bridge against the database (BRIDGE_TRANSPORT=memory by default)' \
 		'bridge-test build and run the bridge test-suite' \
 		'sql-test    run the Postgres behaviour suite (PGlite, no Docker)' \
 		'app         flutter run the mobile app against the local stack' \
+		'web         placeholder Flutter web build at / (not a live deploy)' \
 		'build-android  DEBUG APK with local config; not a signed public release' \
 		'build-ios  unsigned iOS compile; needs Xcode/Mac and is not a release' \
 		'test        SQL + seed + bridge + flutter tests' \
@@ -71,6 +72,7 @@ db-stop:
 
 .PHONY: db-reset
 db-reset:
+	$(Q)echo 'Resetting the LOCAL Supabase database only. Never run `supabase db reset` or `supabase db reset --linked` on a hosted project.'
 	$(Q)supabase db reset
 
 .PHONY: link
@@ -78,7 +80,8 @@ link: $(ENV_LOCAL)
 	$(Q)ref=$$(sed -n 's/^SUPABASE_PROJECT_REF=//p' $(ENV_LOCAL)); \
 	  test -n "$$ref" || { echo 'set SUPABASE_PROJECT_REF in $(ENV_LOCAL) first'; exit 1; }; \
 	  echo "linking to $$ref (you will be asked for the database password)"; \
-	  supabase link --project-ref "$$ref" && supabase db push
+	  echo 'link does not push. Read docs/vercel.md before supabase db push. Never db reset a hosted project.'; \
+	  supabase link --project-ref "$$ref"
 
 # ── services ─────────────────────────────────────────────────────────────────
 .PHONY: bridge
@@ -97,6 +100,10 @@ sql-test:
 .PHONY: app
 app:
 	$(Q)cd $(APP_DIR) && $(FLUTTER) run --dart-define-from-file=../../.messengerx/app.json
+
+.PHONY: web
+web:
+	$(Q)bash $(APP_DIR)/tool/vercel_build.sh build --placeholder
 
 .PHONY: build-ios
 build-ios:
@@ -127,6 +134,12 @@ fmt:
 
 .PHONY: deploy
 deploy:
+	$(Q)test "$(MESSENGERX_CONFIRM_HOSTED_PUSH)" = "yes" || { \
+	  echo 'Refusing hosted deploy. This pushes migrations and functions to the linked Supabase project.'; \
+	  echo 'Read docs/vercel.md. Never run supabase db reset on production.'; \
+	  echo 'When you intend this: MESSENGERX_CONFIRM_HOSTED_PUSH=yes make deploy'; \
+	  exit 1; \
+	}
 	$(Q)supabase db push
 	$(Q)for f in account-age-gate telegram-ingest telegram-link telegram-send; do \
 	  supabase functions deploy "$$f" || exit 1; done
