@@ -8,8 +8,10 @@ FROM debian:bookworm-slim AS tdlib
 # Upstream has no v1.8.43 Git tag. This is the real 1.8.43 version bump commit;
 # pin the commit rather than tracking master or pretending a release tag exists.
 ARG TDLIB_COMMIT=11406d9d6f3baa999b77fbd09f36c67749c31699
+# TDLib's MIME source generator stops CMake configure without gperf. Keep it
+# installed only in this build stage; the runtime image has no compilers.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates libssl-dev zlib1g-dev \
+ && apt-get install -y --no-install-recommends build-essential cmake gperf git ca-certificates libssl-dev zlib1g-dev \
  && git init /tmp/td \
  && git -C /tmp/td remote add origin https://github.com/tdlib/td.git \
  && git -C /tmp/td fetch --depth 1 origin "${TDLIB_COMMIT}" \
