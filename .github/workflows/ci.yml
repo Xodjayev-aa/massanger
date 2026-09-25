@@ -181,20 +181,34 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-  # Builds (never pushes) the worker image so a Dockerfile or TDLib pin that stopped
-  # compiling is caught before someone deploys it.
+  # Build the complete image on trusted PRs as well as main. It is never
+  # published: a compiled TDLib library is not a hosted, persistent worker.
   image:
     name: bridge image builds
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: >-
+      ${{ github.event_name == 'push' ||
+          (github.event_name == 'pull_request' &&
+           github.head_ref == 'arena/01a0d3aa-massanger' &&
+           github.event.pull_request.head.repo.full_name == github.repository) }}
     timeout-minutes: 45
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: services/telegram_bridge/Dockerfile
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: compile TDLib and package the worker (never push)
+        id: build
+        run: docker buildx build --progress plain --load --tag messengerx/bridge:verify --file services/telegram_bridge/Dockerfile . 2>&1 | tee image-build.log
+      # This sandbox cannot download GitHub's artifact-hosted run logs. Put
+      # Docker's last error in a check-run when the build fails, like Flutter CI.
+      - name: publish image build diagnostics on failure
+        if: ${{ failure() && steps.build.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          jq -n --arg sha "$HEAD_SHA" --rawfile log image-build.log \
+            '{name:"Worker image diagnostics",head_sha:$sha,status:"completed",conclusion:"failure",output:{title:"TDLib image build failed",summary:"Build output (last 60000 characters)",text:($log[-60000:])}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id
