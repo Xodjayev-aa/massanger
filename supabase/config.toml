@@ -49,6 +49,10 @@ file_size_limit = "20MiB"
 
 [auth]
 enabled = true
+# Local Docker only. The hosted Site URL is set in the Supabase dashboard to
+# https://messengerx-uz.vercel.app — see docs/vercel.md. Do not put that
+# production origin here, and do not point production at this localhost value
+# or at the retired GitHub Pages /massanger/ path.
 site_url = "http://localhost:5050"
 additional_redirect_urls = [
   "http://localhost:5050/**",

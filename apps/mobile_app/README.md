@@ -24,14 +24,17 @@ flutter run -d chrome --web-port 5050 \
 ```
 
 For a production website, compile against a **real** hosted Supabase project,
-not the placeholders used by CI. The workflow's opt-in Pages job builds with
-`--base-href=/massanger/`. Keep browser redirects on the public website origin,
-not localhost; GitHub Pages must have a matching Supabase redirect allowlist.
+not the placeholders used by CI. Vercel Hobby builds with
+`tool/vercel_build.sh`, which installs Flutter 3.24.5 (Vercel does not ship
+the SDK) and uses `--base-href=/`. The OAuth return is the site root
+`https://messengerx-uz.vercel.app/`, not the retired GitHub Pages
+`/massanger/` path. Keep browser redirects on that public origin, not
+localhost. Dashboard steps are in [docs/vercel.md](../../docs/vercel.md).
 
 | `--dart-define` | Meaning |
 | --- | --- |
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Hosted API HTTPS URL and **public** anon/publishable key; both required. Never compile the service-role key into a client. |
-| `WEB_REDIRECT_URL` | Full public website URL **including base path** for OAuth return (e.g. `https://xodjayev-aa.github.io/massanger/`). |
+| `WEB_REDIRECT_URL` | Public website root for OAuth return. Production is `https://messengerx-uz.vercel.app/`. The Vercel build script sets this; do not point it at `/massanger/`. |
 | `FUNCTION_BASE_URL` | Only when functions live on another origin. |
 | `TELEGRAM_OIDC_ENABLED` | Set `true` only after the hosted `custom:telegram` provider has passed its sign-in smoke test. This is Telegram-app OIDC approval, **not** in-app phone/code sign-in. |
 | `DISABLE_REALTIME` | Set `true` only for debugging/focus polling. |
@@ -77,7 +80,8 @@ flutter build web --release --dart-define-from-file=../../.messengerx/app.json
 ```
 
 `bash tools/verify-client.sh` runs the same analyzer/tests and a **placeholder**
-web build from the repository root; that build cannot be used to sign in.
+root web build (`tool/vercel_build.sh build --placeholder`); that build cannot
+be used to sign in.
 
 Sends reconcile on `client_message_id`, media JSON shape is validated by the
 backend, and private media use signed Storage URLs. The client keeps only

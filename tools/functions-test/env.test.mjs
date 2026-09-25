@@ -11,7 +11,7 @@ const production = {
   SEAL_KEY: 'a0'.repeat(32),
   BRIDGE_TOKEN: 'a'.repeat(40),
   BRIDGE_HMAC_SECRET: 'b'.repeat(40),
-  ALLOWED_ORIGINS: 'https://xodjayev-aa.github.io',
+  ALLOWED_ORIGINS: 'https://messengerx-uz.vercel.app',
 };
 
 const previousDeno = globalThis.Deno;
@@ -23,7 +23,7 @@ describe('production edge function configuration', () => {
   it('accepts an exact HTTPS web origin and sealed link credentials', () => {
     current = production;
     const env = readEnv();
-    assert.deepEqual(env.allowedOrigins, ['https://xodjayev-aa.github.io']);
+    assert.deepEqual(env.allowedOrigins, ['https://messengerx-uz.vercel.app']);
     assert.equal(env.sealKey, production.SEAL_KEY);
   });
 

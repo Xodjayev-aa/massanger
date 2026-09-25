@@ -28,8 +28,9 @@ class AppEnv {
   /// and a real Telegram login has passed the hosted callback round trip.
   final bool telegramOidcEnabled;
 
-  /// Public web app URL including its base path (e.g. GitHub Pages /massanger/).
-  /// Auth redirects must point here, not just to the site's origin.
+  /// Public web app URL. The Vercel site is hosted at the domain root
+  /// (https://messengerx-uz.vercel.app/), not under a /massanger/ prefix.
+  /// Auth redirects must match a Supabase redirect allowlist entry.
   final String? webRedirectUrl;
 
   static const String _undef = 'SUPABASE_URL_NOT_SET';

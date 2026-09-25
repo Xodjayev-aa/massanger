@@ -68,3 +68,6 @@ tools/sql-test/.pgdata/
 
 # Local dart-define file created by `make env` (never commit a real anon key).
 .messengerx/
+
+# Flutter SDK downloaded by the Vercel build script. Never commit it.
+.flutter-sdk/

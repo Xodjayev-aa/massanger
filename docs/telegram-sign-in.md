@@ -37,11 +37,17 @@ Official references:
    authenticated **admin** custom-provider API from a trusted machine; do not
    call it from Flutter or commit a provisioning script with secrets. Keep PKCE
    enabled and nonce checks on; use the issuer's discovery/JWKS verification.
-4. Supabase Auth → URL Configuration: site URL = the real HTTPS website origin,
-   and redirect allowlist includes **only** that website and your native callback
-   `com.messengerx.app://login-callback` once the Android/iOS schemes have been
-   configured and tested. Configure Google as a separate provider with minimal
-   `openid email profile` access (no Gmail/Drive consent).
+4. Supabase Auth → URL Configuration: site URL =
+   `https://messengerx-uz.vercel.app`, and the redirect allowlist includes that
+   origin, the same URL with a trailing slash, and
+   `https://messengerx-uz.vercel.app/**`. Add the native callback
+   `com.messengerx.app://login-callback` only after a native build has been
+   tested. There is no signed public Android installer yet. Google is a
+   separate provider with `openid email profile` only (no Gmail/Drive). In
+   Google Cloud, the **Authorized JavaScript origin** is the Vercel origin
+   `https://messengerx-uz.vercel.app`. Google's **redirect URI** stays
+   `https://<project-ref>.supabase.co/auth/v1/callback`. Do not swap those.
+   Exact clicks are in [vercel.md](vercel.md).
 5. On a test deployment using the **real project**, attempt one new Telegram sign-in
    and one returning sign-in. Verify `auth.users` has the same stable identity,
    the `profiles` trigger created a row with `access_state=active`, `google_email`

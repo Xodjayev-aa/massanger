@@ -10,7 +10,7 @@ publicly deployed service**.
 | Capability | Honest status |
 | --- | --- |
 | Direct/group MessengerX chats, media, typing, receipts | Implemented; server policies and bridge flows have automated tests. |
-| Web client / PWA | Flutter web release **compiles in CI with placeholders**; not published with a real database yet. |
+| Web client / PWA | Flutter web release compiles in CI at site root `/`. Intended Vercel Hobby URL is `https://messengerx-uz.vercel.app` — **not serving a deployment** (`DEPLOYMENT_NOT_FOUND` on 25 September 2026). GitHub Pages `/massanger/` is retired (404). |
 | Google sign-in | Client flow exists; requires hosted Google OAuth and Supabase configuration. No account-age check: Google does not prove account age. |
 | Standalone Telegram identity | Gated `custom:telegram` OIDC option (Telegram-app approval). Needs a real BotFather client, hosted provider and live verification before enabling. **Not the requested in-app phone/code identity sign-in.** |
 | TDLib phone/code/2FA connection | Exists **after** MessengerX sign-in. Requires a durable worker, a real Telegram API ID/hash and encrypted persistent session storage. |
@@ -19,14 +19,19 @@ publicly deployed service**.
 | Android/iOS binaries | Native project sources, OAuth callbacks, permissions and icons are tracked; CI checks a placeholder-config Android debug build. No signed release or device test. iOS PWA is the $0 install path. |
 | Hosted database, public site, native worker | **Not provisioned.** SQL/RLS tests are not proof of live security, backup or uptime. |
 
-**$0 constraints:** GitHub Pages (`*.github.io`) can host the static website and
-Supabase Free can host the database within quotas; the Free database can pause
-when unused. Neither GitHub Pages, Vercel, short-lived functions nor a sleeping
-Render instance is a durable TDLib user-session worker. We do not have a verified
-$0 always-on host with persistent private session storage. The app's personal
-Telegram chat and offline notice features must not be advertised as live until
-that worker has been securely provisioned and tested. No Oracle signup or
-always-on personal computer is assumed.
+**$0 constraints:** Vercel Hobby can host the static website at
+`https://messengerx-uz.vercel.app` (see [docs/vercel.md](docs/vercel.md)), and
+Supabase Free can host the database within quotas. The Free database can pause
+when unused. The old GitHub Pages URL returns 404 and is not the deployment
+path. Vercel is website hosting only. Neither Vercel, short-lived functions nor
+a sleeping free instance is a durable TDLib user-session worker. We do not have
+a verified $0 always-on host with persistent private session storage. Chatting
+with real Telegram users and offline Saved Messages notices must not be
+advertised as live until that worker has been securely provisioned and tested.
+No Oracle signup or always-on personal computer is assumed. There is no signed
+public Android installer. The $0 iPhone option is the PWA (Add to Home Screen),
+not an App Store app. Standalone in-app phone/code identity sign-in is not
+implemented.
 
 ## Map of the repository
 
@@ -66,13 +71,15 @@ key is public by design; RLS must still be tested.
 
 ## Path to a public launch
 
-See [docs/runbook.md](docs/runbook.md) for precise provisioning and verification
-steps, [docs/telegram-sign-in.md](docs/telegram-sign-in.md) for the independent
-Telegram OIDC setup, and [docs/architecture.md](docs/architecture.md) for trust
-boundaries. The GitHub Pages publish job is intentionally **opt-in** and cannot
-run until a hosted project, OAuth providers and a durable worker have been
-validated. For the explicit phone/code **identity** requirement (not just TDLib
-linking), a secure Supabase session issuance/recovery design still needs to be
+See [docs/vercel.md](docs/vercel.md) for the Vercel Hobby project name,
+dashboard clicks, and the split between Google's JavaScript origin and
+Supabase's `/auth/v1/callback`. See [docs/runbook.md](docs/runbook.md) for
+migrations, RLS and backups, [docs/telegram-sign-in.md](docs/telegram-sign-in.md)
+for the independent Telegram OIDC setup, and
+[docs/architecture.md](docs/architecture.md) for trust boundaries. Connecting
+Vercel does not apply database migrations and does not start a Telegram worker.
+For the explicit phone/code **identity** requirement (not just TDLib linking),
+a secure Supabase session issuance/recovery design still needs to be
 implemented. This README does not treat OIDC approval as a silent substitute.
 
 ## License

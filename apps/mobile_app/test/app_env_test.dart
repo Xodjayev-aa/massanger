@@ -38,14 +38,14 @@ void main() {
       expect(configured.realtimeUrl.toString(), 'wss://abcdef12345.supabase.co/realtime/v1/websocket');
     });
 
-    test('web OAuth redirects preserve the static host base path', () {
-      const githubPages = AppEnv(
+    test('web OAuth redirects can target the Vercel site root', () {
+      const vercel = AppEnv(
         supabaseUrl: 'https://abcdef12345.supabase.co',
         supabaseAnonKey: 'public-key',
-        webRedirectUrl: 'https://xodjayev-aa.github.io/massanger/',
+        webRedirectUrl: 'https://messengerx-uz.vercel.app/',
       );
-      expect(githubPages.webRedirectUrl, 'https://xodjayev-aa.github.io/massanger/');
-      githubPages.validate();
+      expect(vercel.webRedirectUrl, 'https://messengerx-uz.vercel.app/');
+      vercel.validate();
       const invalid = AppEnv(
         supabaseUrl: 'https://abcdef12345.supabase.co',
         supabaseAnonKey: 'public-key',
