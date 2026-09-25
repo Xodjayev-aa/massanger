@@ -30,6 +30,7 @@ const U = {
   gated: '33333333-3333-3333-3333-333333333333',
   other: '44444444-4444-4444-4444-444444444444',
   link: '66666666-6666-6666-6666-666666666666',
+  oidc: '77777777-7777-7777-7777-777777777777',
 };
 
 // ---------------------------------------------------------------------------
@@ -145,7 +146,7 @@ await test('auth.users trigger creates profiles + a telegram_accounts row', asyn
   eq(await scalar(`select count(*)::int from public.profiles`), 5, 'profiles created');
   eq(await scalar(`select access_state::text from public.profiles where id = '${U.a}'`), 'active');
   eq(await scalar(`select access_state::text from public.profiles where id = '${U.gated}'`),
-     'pending_verification', 'google signups start gated');
+     'active', 'Google signups no longer use unprovable account-age checks');
   eq(await scalar(`select count(*)::int from public.telegram_accounts`), 5, 'one link row per user');
   eq(await scalar(`select username from public.profiles where id = '${U.a}'`), 'aziz_carrier',
      'username derived from full name');
@@ -159,6 +160,22 @@ await test('username collisions are resolved, not fatal', async () => {
   const rows = await query(`select username from public.profiles where display_name = 'Aziz Carrier'`);
   eq(rows.length, 2, 'two users sharing a display name');
   eq(new Set(rows.map((r) => r.username)).size, 2, 'two distinct usernames');
+});
+
+await test('email-less Telegram OIDC users get a profile without being mislabeled as Google', async () => {
+  await becomeOwner();
+  await exec(`insert into auth.users (id, raw_app_meta_data, raw_user_meta_data) values
+    ('${U.oidc}', '{"provider":"custom:telegram"}', '{"preferred_username":"telegram_joiner","name":"Telegram Joiner"}')`);
+  eq(await scalar(`select username from public.profiles where id = '${U.oidc}'`), 'telegram_joiner');
+  eq(await scalar(`select access_state::text from public.profiles where id = '${U.oidc}'`), 'active');
+  eq(await scalar(`select google_email from public.profiles where id = '${U.oidc}'`), null);
+  eq(await scalar(`select google_email from public.profiles where id = '${U.gated}'`), 'kid@example.com');
+  eq(await scalar(`select google_email from public.profiles where id = '${U.b}'`), null);
+  await exec(`update auth.users set email = 'other@example.com' where id = '${U.oidc}'`);
+  eq(await scalar(`select google_email from public.profiles where id = '${U.oidc}'`), null,
+     'a non-Google address never becomes a Google address');
+  eq(await scalar(`select count(*)::int from public.telegram_accounts where user_id = '${U.oidc}'`), 1,
+     'sign-in alone creates an unlinked TDLib slot');
 });
 
 // ---------------------------------------------------------------------------
@@ -190,13 +207,12 @@ await test('users cannot see other users chats, telegrams rows or the ledger', a
   eq(await scalar(`select count(*)::int from public.telegram_inbox_events`), 0, 'empty ledger to start');
 });
 
-await test('google_credentials / eligibility_checks are unreachable for clients', async () => {
+await test('retired Google credentials contain no tokens and are client-inaccessible', async () => {
   await becomeService();
-  await exec(`insert into public.eligibility_checks (user_id, verdict, method) values ('${U.a}', 'passed', 'manual')`);
-  await become(U.b);
-  await throws(() => exec(`select count(*) from public.eligibility_checks`), /permission denied/);
+  eq(await scalar(`select count(*)::int from public.google_credentials`), 0);
   await become(U.a);
   await throws(() => exec(`select count(*) from public.google_credentials`), /permission denied/);
+  await throws(() => exec(`select count(*) from public.eligibility_checks`), /permission denied/);
 });
 
 // ---------------------------------------------------------------------------
@@ -360,35 +376,46 @@ await test('00011: an avatar is removed only with p_clear_avatar', async () => {
 });
 
 // ---------------------------------------------------------------------------
-group('eligibility gate');
-await test('a gated Google account cannot chat', async () => {
+group('server-managed account access');
+await test('Google signups have access without importing Gmail or Drive data', async () => {
   await become(U.gated);
+  const [st] = await query(`select public.eligibility_status() as s`);
+  eq(st.s.access_state, 'active');
+  eq(st.s.passed, true);
+  eq(st.s.age_days, undefined);
+  const [row] = await query(`select public.create_direct_chat(null, 'stranger') as id`);
+  assert(row.id, 'a signed-in account can start a chat');
+});
+
+await test('manual restrictions still block messaging and cannot be bypassed by an old age verdict', async () => {
+  await becomeService();
+  await exec(`update public.profiles set access_state = 'restricted', access_state_reason = 'moderation'
+              where id = '${U.other}'`);
+  await become(U.other);
   await throws(() => rpc('public.create_direct_chat', `null, 'dilnoza_rustamova'`), /not eligible/);
   const [st] = await query(`select public.eligibility_status() as s`);
-  eq(st.s.access_state, 'pending_verification');
+  eq(st.s.passed, false);
+  eq(st.s.reason, 'moderation');
+  await throws(() => exec(`update public.profiles set access_state = 'active' where id = '${U.other}'`), /server-managed/);
+  await becomeService();
+  await throws(() => rpc('public.record_eligibility_check', `'{"user_id":"${U.other}","verdict":"passed"}'::jsonb`), /does not exist/);
+  await exec(`update public.profiles set access_state = 'active', access_state_reason = null where id = '${U.other}'`);
 });
 
-await test('record_eligibility_check unlocks after the age gate passes', async () => {
+await test('retiring age states does not unban a moderated account', async () => {
   await becomeService();
-  await exec(`select public.record_eligibility_check(jsonb_build_object(
-      'user_id', '${U.gated}', 'request_id', 'req-1', 'method', 'gmail_profile',
-      'verdict', 'passed', 'account_age_days', 1421, 'min_age_days', 366,
-      'account_created_at', (clock_timestamp() - interval '1421 days')::text,
-      'email', 'kid@example.com', 'signals', '{"initialData":1}'::jsonb))`);
+  await exec(`update public.profiles set access_state = 'pending_verification',
+                 access_state_reason = 'Google accounts must be older than 1 year. Verify to unlock messaging.',
+                 google_account_age_days = 100 where id = '${U.gated}';
+              update public.profiles set access_state = 'banned', access_state_reason = 'moderation'
+              where id = '${U.other}';`);
+  await becomeOwner();
+  await exec(readFileSync(join(MIGRATIONS, '00013_retire_google_age_gate.sql'), 'utf8'));
+  await becomeService();
   eq(await scalar(`select access_state::text from public.profiles where id = '${U.gated}'`), 'active');
-  await become(U.gated);
-  const [row] = await query(`select public.create_direct_chat(null, 'stranger') as id`);
-  assert(row.id, 'gated user can now start a chat');
-});
-
-await test('a too-young Google account is restricted, not deleted', async () => {
-  await becomeService();
-  await exec(`select public.record_eligibility_check(jsonb_build_object(
-      'user_id', '${U.other}', 'request_id', 'req-2', 'method', 'drive_oldest_file',
-      'verdict', 'failed', 'account_age_days', 91, 'min_age_days', 366,
-      'reason', 'Google account is 91 days old; 366 required'))`);
-  eq(await scalar(`select access_state::text from public.profiles where id = '${U.other}'`), 'restricted');
-  eq(await scalar(`select count(*)::int from auth.users where id = '${U.other}'`), 1, 'account survives for appeal');
+  eq(await scalar(`select google_account_age_days from public.profiles where id = '${U.gated}'`), null);
+  eq(await scalar(`select access_state::text from public.profiles where id = '${U.other}'`), 'banned');
+  await exec(`update public.profiles set access_state = 'active', access_state_reason = null where id = '${U.other}'`);
 });
 
 // ---------------------------------------------------------------------------
@@ -678,6 +705,8 @@ await test('storage buckets are configured for avatars / images / voice-notes', 
   eq(buckets.find((b) => b.id === 'images').public, false);
   eq(buckets.find((b) => b.id === 'voice-notes').allowed_mime_types.includes('audio/ogg'), true,
      'Telegram voice notes must be ogg/opus');
+  eq(buckets.find((b) => b.id === 'voice-notes').allowed_mime_types.includes('audio/wav'), true,
+     'app-recorded WAV notes must be accepted by Storage');
 });
 
 await test('avatar uploads are confined to the owner prefix', async () => {
@@ -687,6 +716,18 @@ await test('avatar uploads are confined to the owner prefix', async () => {
     () => exec(`insert into storage.objects (bucket_id, name, owner) values ('avatars', '${U.b}/avatar.png', '${U.b}')`),
     /row-level security|policy/i
   );
+});
+
+await test('a chat member cannot delete another member’s uploaded media', async () => {
+  const name = `${chatId}/private-photo.jpg`;
+  await become(U.a);
+  await exec(`insert into storage.objects (bucket_id, name, owner) values ('images', '${name}', '${U.a}')`);
+  await become(U.b);
+  eq((await query(`delete from storage.objects where name = '${name}' returning id`)).length, 0,
+     'members can read but must not remove someone else’s attachment');
+  await become(U.a);
+  eq((await query(`delete from storage.objects where name = '${name}' returning id`)).length, 1,
+     'uploader can remove their own media');
 });
 
 await test('chat media is gated by chat membership', async () => {
@@ -915,6 +956,606 @@ await test('expired presence rows are pruned, not left hanging', async () => {
   await becomeService();
   assert(Number(await scalar(`select public.prune_chat_typing()`)) >= 1, 'prune removed the stale row');
   eq(await scalar(`select count(*)::int from public.chat_typing where expires_at < clock_timestamp()`), 0);
+});
+
+// ---------------------------------------------------------------------------
+group('offline notices (00012)');
+
+/**
+ * The queue is bridge-internal: every read here happens as the owner, because a
+ * client role has neither the grant nor an RLS policy (asserted below).
+ */
+const noticeRows = async (userId = U.a) => {
+  await becomeOwner();
+  return query(`select * from public.notify_requests where user_id = '${userId}' order by id`);
+};
+const noticeCount = async (userId = U.a, state = 'queued') => {
+  await becomeOwner();
+  return Number(await scalar(
+    `select count(*)::int from public.notify_requests where user_id = '${userId}' and state = '${state}'`));
+};
+/** Dilnoza writes to Aziz; `chatId` is the direct chat created in the messaging group. */
+const sendAsDilnoza = async (text) => {
+  await become(U.b);
+  await rpc('public.send_message', `'${chatId}', 'text', '${text}', null, null, null`);
+};
+const azizAway = async () => {
+  await becomeOwner();
+  await exec(`update public.profiles
+                 set last_seen_at = clock_timestamp() - interval '10 minutes',
+                     access_state = 'active', deleted_at = null,
+                     push_telegram = true, push_preview = true
+               where id = '${U.a}'`);
+};
+
+await test('a message to an offline recipient queues exactly one notice', async () => {
+  await becomeOwner();
+  await exec(`
+    delete from public.notify_requests;
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 200, sync_direction = 'both',
+           self_chat_id = null, linked_at = clock_timestamp() where user_id = '${U.b}';
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 100, sync_direction = 'both',
+           self_chat_id = null where user_id = '${U.a}';
+    update public.chat_participants set unread_count = 0, muted_until = null, left_at = null
+     where chat_id = '${chatId}';
+  `);
+  await azizAway();
+
+  await sendAsDilnoza('qayerdasan?');
+
+  const rows = await noticeRows(U.a);
+  eq(rows.length, 1, 'one queued notice');
+  eq(rows[0].state, 'queued');
+  eq(rows[0].folded, 1, 'a single message is not folded');
+  eq(String(rows[0].chat_id), chatId);
+  eq(rows[0].preview, 'qayerdasan?', 'the preview is the message text');
+  eq(new Date(rows[0].next_attempt_at).getTime() > Date.now(), true,
+     'a short quiet window lets a burst collapse before delivery');
+  eq(rows[0].sender_name, 'Dilnoza Rustamova', 'the human label, not the username');
+  eq(String(rows[0].sender_user_id), U.b);
+  eq(await noticeCount(U.b), 0, 'the sender is never notified about their own message');
+  await become(U.a);
+  eq(await scalar(`select public.banner_silence_telegram($1)`, [rows[0].last_message_id]), false,
+     'an app-only message can show a foreground banner');
+  await become(U.other);
+  eq(await scalar(`select public.banner_silence_telegram($1)`, [rows[0].last_message_id]), true,
+     'a nonmember cannot use the banner RPC to inspect another chat');
+});
+
+await test('a burst folds into one row and keeps the newest preview', async () => {
+  await sendAsDilnoza('birinchi');
+  await sendAsDilnoza('ikkinchi');
+
+  const rows = await noticeRows(U.a);
+  eq(rows.length, 1, 'a burst is one notification, not three');
+  eq(rows[0].folded, 3, 'folded counter');
+  eq(rows[0].preview, 'ikkinchi', 'the preview follows the latest message');
+});
+
+await test('a recipient who is back in the app is not buzzed', async () => {
+  await becomeOwner();
+  await exec(`update public.profiles set last_seen_at = clock_timestamp() where id = '${U.a}'`);
+  await sendAsDilnoza('endi koʻrdingmi?');
+
+  const rows = await noticeRows(U.a);
+  eq(rows.length, 0, 'returning online cancels the burst and suppresses new notices');
+
+  await becomeService();
+  const claimed = await query(`select * from public.bridge_claim_notify('worker-1', null, 10)`);
+  eq(claimed.length, 0, 'nothing is handed to the worker');
+});
+
+await test('reading the chat cancels a queued notice', async () => {
+  await azizAway();
+  await sendAsDilnoza('oʻqilmagan xabar');
+  eq(await noticeCount(U.a), 1, 'queued while away');
+
+  await become(U.a);
+  await rpc('public.mark_chat_read', `'${chatId}'`);
+  eq(await noticeCount(U.a), 0, 'reading deletes the queued notice');
+});
+
+await test('a muted chat stays silent, and unmuting restores delivery', async () => {
+  await becomeOwner();
+  await exec(`update public.chat_participants
+                 set muted_until = clock_timestamp() + interval '1 hour', unread_count = 0
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await sendAsDilnoza('muted chat');
+  eq(await noticeCount(U.a), 0, 'mute is respected at queue time');
+
+  await becomeOwner();
+  await exec(`update public.chat_participants set muted_until = null
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await sendAsDilnoza('unmuted');
+  eq(await noticeCount(U.a), 1, 'unmuting brings the buzz back');
+});
+
+await test('traffic the user\'s own Telegram delivered is not announced twice', async () => {
+  await becomeOwner();
+  await exec(`
+    delete from public.notify_requests;
+    insert into public.telegram_chats (owner_user_id, tg_chat_id, tg_chat_type, chat_id, peer_user_id, sync_direction)
+    values ('${U.a}', ${TG_CHAT_STR}, 'private', '${chatId}', 9999, 'both')
+    on conflict (owner_user_id, tg_chat_id)
+    do update set chat_id = excluded.chat_id, sync_direction = 'both';
+  `);
+  await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
+              values ('${chatId}', '${U.b}', 'text', 'kelgan xabar', 'telegram', 900001)`);
+  eq(await noticeCount(U.a), 0, 'mirrored Telegram traffic already buzzed on their phone');
+  const telegramMessage = await one(`select id from public.messages where tg_message_id = 900001`);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [telegramMessage.id]), true,
+     'the foreground banner is suppressed too');
+
+  // Same traffic, but the recipient does not mirror this chat: now it *is* news.
+  await becomeOwner();
+  await exec(`delete from public.telegram_chats where owner_user_id = '${U.a}' and chat_id = '${chatId}'`);
+  await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
+              values ('${chatId}', '${U.b}', 'text', 'mapped emas', 'telegram', 900002)`);
+  eq(await noticeCount(U.a), 1, 'an unmapped mirror is announced');
+  const [row] = await noticeRows(U.a);
+  eq(row.source, 'telegram');
+});
+
+await test('an app send headed for the recipient’s Telegram does not race a Saved Messages buzz', async () => {
+  await becomeOwner();
+  await exec(`
+    delete from public.notify_requests;
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 100,
+           sync_direction = 'both' where user_id = '${U.a}';
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 200,
+           sync_direction = 'both' where user_id = '${U.b}';
+    insert into public.telegram_chats
+      (owner_user_id, tg_chat_id, tg_chat_type, chat_id, peer_user_id, sync_direction)
+    values ('${U.b}', 100, 'private', '${chatId}', 100, 'both');
+  `);
+  await azizAway();
+  await sendAsDilnoza('also forwarded to Telegram');
+  const [queued] = await noticeRows(U.a);
+  eq(!!queued, true, 'the app message can still be announced if forwarding fails');
+  const outbox = await one(`select id, tg_chat_id, state::text as state from public.telegram_outbox
+                             where message_id = $1`, [queued.last_message_id]);
+  eq(String(outbox.tg_chat_id), '100', 'the sender forwards to the recipient’s own Telegram id');
+  eq(outbox.state, 'queued');
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [queued.last_message_id]), true,
+     'a foreground banner also waits rather than racing the Telegram send');
+
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where id = $1`, [queued.id]);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'wait until the original Telegram outbox has a result');
+  await becomeOwner();
+  await exec(`update public.telegram_outbox set state = 'sent' where id = $1`, [outbox.id]);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'success means no duplicate Saved Messages notification');
+  eq(await noticeCount(U.a, 'skipped'), 1);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [queued.last_message_id]), true,
+     'a delivered original also suppresses the foreground banner');
+
+  await sendAsDilnoza('but this forward fails');
+  const pending = (await noticeRows(U.a)).find((row) => row.state === 'queued');
+  eq(!!pending, true, 'a separate queued row follows the skipped history');
+  const failedOutbox = await one(`select id from public.telegram_outbox where message_id = $1`, [pending.last_message_id]);
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where id = $1`, [pending.id]);
+  await exec(`update public.telegram_outbox set state = 'failed' where id = $1`, [failedOutbox.id]);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'a retryable failed outbox is still capable of delivering the original');
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [pending.last_message_id]), true,
+     'the banner likewise waits for the retry');
+  await becomeOwner();
+  await exec(`update public.telegram_outbox set attempts = max_attempts where id = $1`, [failedOutbox.id]);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [pending.last_message_id]), false,
+     'an exhausted forward releases the foreground fallback');
+  await becomeService();
+  const [fallback] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(!!fallback, true, 'a terminally failed forward leaves Saved Messages as a fallback');
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9', $2)`,
+                  [fallback.notify_id, fallback.preview]), true);
+  await exec(`select public.bridge_complete_notify($1, 'skipped')`, [fallback.notify_id]);
+  await becomeOwner();
+  await exec(`delete from public.telegram_chats where owner_user_id = '${U.b}' and tg_chat_id = 100`);
+});
+
+await test('a shared Telegram group suppresses a second notice even when app import is off', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  const group = await one(`insert into public.chats (kind, title, created_by)
+    values ('group', 'Shared TG group', '${U.b}') returning id`);
+  await exec(`
+    insert into public.chat_participants (chat_id, user_id, role) values
+      ('${group.id}', '${U.b}', 'owner'), ('${group.id}', '${U.a}', 'member');
+    insert into public.telegram_chats
+      (owner_user_id, tg_chat_id, tg_chat_type, chat_id, sync_direction) values
+      ('${U.b}', 90117, 'basic_group', '${group.id}', 'both'),
+      ('${U.a}', 90117, 'basic_group', '${group.id}', 'off');
+  `);
+  await azizAway();
+  await become(U.b);
+  const [sent] = await rpc('public.send_message', `'${group.id}', 'text', 'to the group', null, null, null`);
+  const outbox = await one(`select id, state::text as state from public.telegram_outbox where message_id = $1`, [sent.id]);
+  eq(outbox.state, 'queued');
+  const [waiting] = await noticeRows(U.a);
+  eq(waiting.state, 'queued');
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [sent.id]), true,
+     'the original Telegram group send is still pending');
+  await becomeOwner();
+  await exec(`update public.telegram_outbox set state = 'sent' where id = $1`, [outbox.id]);
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where id = $1`, [waiting.id]);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'Telegram already delivered the group message even with app import disabled');
+  eq(await noticeCount(U.a, 'skipped'), 1);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [sent.id]), true);
+  await becomeOwner();
+  await exec(`delete from public.telegram_chats where chat_id = '${group.id}';
+              delete from public.chats where id = '${group.id}'`);
+});
+
+await test('offline alerts remain available with account mirroring disabled', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests;
+              update public.telegram_accounts set sync_direction = 'off' where user_id = '${U.a}';
+              update public.chat_participants set unread_count = 0, muted_until = null, left_at = null
+                where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await azizAway();
+  await sendAsDilnoza('app-only with mirroring off');
+  const [queued] = await noticeRows(U.a);
+  eq(queued.state, 'queued', 'the alert switch is independent of account mirroring');
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+                where id = $1`, [queued.id]);
+  await becomeService();
+  const [leased] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(leased.notify_id, queued.id, 'the independent notice can actually be sent');
+  await exec(`select public.bridge_complete_notify($1, 'skipped')`, [leased.notify_id]);
+  await becomeOwner();
+  await exec(`update public.telegram_accounts set sync_direction = 'both' where user_id = '${U.a}'`);
+});
+
+await test('an off-mapped Telegram chat still suppresses a duplicate alert', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests;
+              insert into public.telegram_chats
+                (owner_user_id, tg_chat_id, tg_chat_type, chat_id, peer_user_id, sync_direction)
+              values ('${U.a}', ${TG_CHAT_STR}, 'private', '${chatId}', 9999, 'off')`);
+  await azizAway();
+  await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
+              values ('${chatId}', '${U.b}', 'text', 'already on Telegram', 'telegram', 900003)`);
+  eq(await noticeCount(U.a), 0, 'a mapped user already has the Telegram original');
+  const message = await one(`select id from public.messages where tg_message_id = 900003`);
+  await become(U.a);
+  eq(await scalar('select public.banner_silence_telegram($1)', [message.id]), true);
+  await becomeOwner();
+  await exec(`delete from public.telegram_chats
+               where owner_user_id = '${U.a}' and chat_id = '${chatId}'`);
+});
+
+await test('previews are a preference, and turning push off clears the queue', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('birinchi maxfiy');
+  eq((await noticeRows(U.a))[0].preview, 'birinchi maxfiy', 'previews on by default');
+
+  await become(U.a);
+  const [prefs] = await query(`select public.set_push_preferences(null, false) as p`);
+  eq(prefs.p.push_preview, false, 'the RPC echoes the new preference');
+  eq(prefs.p.push_telegram, true);
+  eq((await noticeRows(U.a))[0].preview, '', 'already-queued text is wiped immediately');
+
+  await sendAsDilnoza('ikkinchi maxfiy');
+  const folded = await noticeRows(U.a);
+  eq(folded.length, 1);
+  eq(folded[0].folded, 2, 'still folded');
+  eq(folded[0].preview, '', 'and still content-free');
+
+  await become(U.a);
+  await query(`select public.set_push_preferences(false, null) as p`);
+  eq(await noticeCount(U.a), 0, 'push off deletes the queued notice');
+  await sendAsDilnoza('push oʻchirilgan');
+  eq(await noticeCount(U.a), 0, 'and nothing new is queued');
+});
+
+await test('a read after the claim invalidates its lease before delivery', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('sent just before read');
+
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  const [leased] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(!!leased, true, 'row leased');
+  eq(await scalar(`select public.bridge_notice_owed($1, 'not-the-worker')`, [leased.notify_id]), false,
+     'a different worker cannot send this lease');
+
+  await become(U.a);
+  await rpc('public.mark_chat_read', `'${chatId}'`);
+  await becomeService();
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9')`, [leased.notify_id]), false,
+     'the last-moment check sees the read');
+  eq(await scalar(`select state::text from public.notify_requests where id = $1`, [leased.notify_id]), 'skipped');
+  eq(await scalar(`select public.bridge_complete_notify($1, 'sent', 555003, 100, false, null, null)`,
+                  [leased.notify_id]), false, 'a late send cannot revive a cancelled row');
+});
+
+await test('turning push off cancels an already-leased notice', async () => {
+  await azizAway();
+  await sendAsDilnoza('turning off');
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  const [leased] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(!!leased, true, 'row leased');
+  await become(U.a);
+  await query(`select public.set_push_preferences(false, null)`);
+  await becomeService();
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9')`, [leased.notify_id]), false);
+  eq(await scalar(`select state::text from public.notify_requests where id = $1`, [leased.notify_id]), 'skipped');
+});
+
+await test('turning previews off also protects a notice already leased by the worker', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('private before claim');
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  const [leased] = await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`);
+  eq(leased.preview, 'private before claim');
+
+  await become(U.a);
+  await query(`select public.set_push_preferences(null, false)`);
+  await becomeService();
+  eq(await scalar(`select preview from public.notify_requests where id = $1`, [leased.notify_id]), '',
+     'the database erases text even after the worker has claimed it');
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9', $2)`,
+                  [leased.notify_id, leased.preview]), false,
+     'a worker holding the old preview cannot send it');
+  eq(await scalar(`select public.bridge_complete_notify($1, 'skipped')`, [leased.notify_id]), true);
+});
+
+await test('deleting an unsent message drops its queued preview', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('deleted before the quiet window');
+  const [queued] = await noticeRows(U.a);
+  eq(queued.preview, 'deleted before the quiet window');
+  await become(U.b);
+  await rpc('public.delete_message', `'${queued.last_message_id}'`);
+  eq(await noticeCount(U.a), 0, 'retracted text never goes into Saved Messages');
+});
+
+await test('the queue is invisible to clients and unwritable by them', async () => {
+  await becomeOwner();
+  // The previous case turned Aziz's push off; the RLS assertion needs a known start.
+  await exec(`update public.profiles set push_telegram = true where id = '${U.a}'`);
+  await become(U.b);
+  await throws(() => exec(`select count(*) from public.notify_requests`), /permission denied/);
+  await throws(() => exec(`select public.bridge_claim_notify('worker-1', null, 5)`), /permission denied/);
+  await throws(() => exec(`select app.notify_should_send('${U.a}', '${U.b}')`), /permission denied/);
+  // RLS filters silently rather than raising, so the assertion is "nothing changed".
+  await exec(`update public.profiles set push_telegram = false where id = '${U.a}'`);
+  await becomeOwner();
+  eq(await scalar(`select push_telegram from public.profiles where id = '${U.a}'`), true,
+     'another user cannot turn off someone else\'s notices');
+  // self_chat_id is bridge-managed, like the rest of the session row
+  await become(U.a);
+  await throws(() => exec(`update public.telegram_accounts set self_chat_id = 1 where user_id = '${U.a}'`),
+               /managed by the bridge/);
+});
+
+await test('the bridge claims a notice, targets Saved Messages and caches the chat id', async () => {
+  await becomeOwner();
+  await exec(`
+    delete from public.notify_requests;
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 100, sync_direction = 'both',
+           self_chat_id = null where user_id = '${U.a}';
+  `);
+  await azizAway();
+  await sendAsDilnoza('claim me');
+
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', null, 5)`)).length, 0,
+     'the worker waits for the folding window');
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  const claimed = await query(`select * from public.bridge_claim_notify('worker-9', null, 5)`);
+  eq(claimed.length, 1, 'one claimable notice');
+  const row = claimed[0];
+  eq(String(row.user_id), U.a, 'the recipient owns the session that delivers it');
+  eq(String(row.tg_self_chat_id), '100', 'Saved Messages falls back to the own Telegram id');
+  eq(String(row.tg_user_id), '100');
+  eq(row.preview, 'claim me');
+  eq(row.folded, 1);
+  eq(row.attempts, 1, 'claiming burns one attempt');
+  eq(await scalar(`select state::text from public.notify_requests where id = $1`, [row.notify_id]), 'in_flight');
+  eq(await scalar(`select public.bridge_notice_owed($1, 'worker-9')`, [row.notify_id]), true,
+     'the recipient is still away and unread');
+  eq((await query(`select * from public.bridge_claim_notify('worker-8', null, 5)`)).length, 0,
+     'a second worker cannot steal the lease');
+
+  await exec(`select public.bridge_complete_notify($1, 'sent', 555001, 777001, false, null, null)`, [row.notify_id]);
+  const done = await one(`select * from public.notify_requests where id = $1`, [row.notify_id]);
+  eq(done.state, 'sent');
+  eq(String(done.tg_message_id), '555001');
+  eq(String(done.tg_self_chat_id), '777001');
+  eq(await scalar(`select self_chat_id::text from public.telegram_accounts where user_id = '${U.a}'`), '777001',
+     'the discovered chat id is cached for the next notice');
+});
+
+await test('relinking a different Telegram user never reuses the old Saved Messages id', async () => {
+  await becomeService();
+  eq(await scalar(`select self_chat_id::text from public.telegram_accounts where user_id = '${U.a}'`), '777001');
+  await exec(`update public.telegram_accounts set tg_user_id = 101 where user_id = '${U.a}'`);
+  eq(await scalar(`select self_chat_id from public.telegram_accounts where user_id = '${U.a}'`), null,
+     'the previous Telegram identity’s Saved Messages chat is erased');
+});
+
+await test('a parked notice retries, a revoked session fails it, and history is pruned', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('flood wait');
+
+  await becomeOwner();
+  await exec(`update public.notify_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  const [first] = await query(`select * from public.bridge_claim_notify('worker-1', null, 5)`);
+  await exec(`select public.bridge_complete_notify($1, 'queued', null, null, false, 'flood_wait_12', '2 minutes')`,
+    [first.notify_id]);
+  const parked = await one(`select * from public.notify_requests where id = $1`, [first.notify_id]);
+  eq(parked.state, 'queued', 'requeued, not lost');
+  eq(parked.last_error, 'flood_wait_12');
+  eq(parked.claimed_by, null, 'the lease is released');
+  eq((await query(`select * from public.bridge_claim_notify('worker-1', null, 5)`)).length, 0,
+     'and it is not claimable before the retry time');
+
+  eq(Number(await scalar(`select public.bridge_fail_notify('${U.a}', 'telegram session was revoked')`)), 1,
+     'a revoked session fails the owner\'s queue');
+  eq(await scalar(`select state::text from public.notify_requests where id = $1`, [first.notify_id]), 'failed');
+
+  // `notify_requests_touch` keeps updated_at honest, so old history is inserted
+  // rather than backdated — which is also what the retention window must survive.
+  await becomeOwner();
+  await exec(`insert into public.notify_requests
+                (user_id, chat_id, sender_name, state, created_at, updated_at)
+              values ('${U.a}', '${chatId}', 'Dilnoza Rustamova', 'sent',
+                      clock_timestamp() - interval '4 days', clock_timestamp() - interval '4 days')`);
+  eq(Number(await scalar(`select public.prune_notify_requests()`)), 1, 'terminal rows past the window are pruned');
+  eq(await scalar(`select count(*)::int from public.notify_requests`), 1, 'recent history is kept');
+});
+
+await test('retry exhaustion stops a permanently parked notice', async () => {
+  await becomeOwner();
+  await exec(`delete from public.notify_requests`);
+  await azizAway();
+  await sendAsDilnoza('fourth failure');
+  await becomeOwner();
+  await exec(`update public.notify_requests set attempts = max_attempts,
+                next_attempt_at = clock_timestamp() - interval '1 second'
+              where user_id = '${U.a}' and state = 'queued'`);
+  await becomeService();
+  eq((await query(`select * from public.bridge_claim_notify('worker-9', '${U.a}', 5)`)).length, 0,
+     'a fifth delivery attempt is never leased');
+  eq(await noticeCount(U.a, 'failed'), 1);
+});
+
+// ---------------------------------------------------------------------------
+group('new Telegram contacts (00016)');
+let contactRequestId = null;
+let contactChatId = null;
+await test('starting a Telegram chat requires a linked, permitted TDLib account', async () => {
+  await become(U.oidc);
+  await throws(() => rpc('public.telegram_start_chat', "'@FreshContact'"), /Connect Telegram/);
+  await becomeService();
+  await exec(`update public.telegram_accounts
+     set tg_user_id = 840001, auth_state = 'linked', mirror_to_app = false
+   where user_id = '${U.oidc}'`);
+  await become(U.oidc);
+  await throws(() => rpc('public.telegram_start_chat', "'@FreshContact'"), /enable mirroring/);
+  await becomeService();
+  await exec(`update public.telegram_accounts set mirror_to_app = true where user_id = '${U.oidc}'`);
+});
+
+await test('only a public username can be requested; the queue cannot be forged by clients', async () => {
+  await become(U.oidc);
+  await throws(() => rpc('public.telegram_start_chat', "'+998901112233'"), /public Telegram username/);
+  await throws(() => rpc('public.telegram_start_chat', "'t.me/other'"), /public Telegram username/);
+  const [queued] = await rpc('public.telegram_start_chat', "'  @FreshContact  '");
+  contactRequestId = queued.telegram_start_chat.request_id;
+  assert(contactRequestId, 'an owner-only queue receipt is returned');
+  const [again] = await rpc('public.telegram_start_chat', "'freshcontact'");
+  eq(again.telegram_start_chat.request_id, contactRequestId, 'two devices do not duplicate a pending lookup');
+  await throws(() => exec(`select * from public.telegram_chat_requests`), /permission denied/);
+  await throws(() => exec(`update public.telegram_chat_requests set status = 'succeeded'`), /permission denied/);
+  await throws(() => rpc('public.bridge_claim_chat_request', "'hacker', null, '1 second'"), /permission denied/);
+  await become(U.b);
+  eq((await rpc('public.telegram_chat_request_state', `'${contactRequestId}'`))[0].telegram_chat_request_state,
+     null, 'another account cannot inspect the request');
+});
+
+await test('only a real private chat mapped to the requester can finish a claimed lookup', async () => {
+  await becomeService();
+  const noOther = await rpc('public.bridge_claim_chat_request', `'worker-1', '${U.other}', '10 seconds'`);
+  eq(noOther[0].bridge_claim_chat_request, null, 'the wrong owner has no work');
+  const [row] = await rpc('public.bridge_claim_chat_request', `'worker-1', '${U.oidc}', '10 seconds'`);
+  eq(row.bridge_claim_chat_request.request_id, contactRequestId);
+  eq(row.bridge_claim_chat_request.username, 'freshcontact');
+  eq((await rpc('public.bridge_finish_chat_request', `'${contactRequestId}', 'worker-else', null, 'ignored', null`))[0].bridge_finish_chat_request,
+     false, 'another worker cannot complete the lease');
+  await throws(
+    () => rpc('public.bridge_finish_chat_request', `'${contactRequestId}', 'worker-1', '${chatId}', null, null`),
+    /private Telegram mirror owned by the requester/,
+  );
+  const [created] = await rpc('public.bridge_resolve_chat',
+    `'${U.oidc}', 550001, 'private', 'Fresh Contact', 550001, 'freshcontact', 'Fresh', 'Contact', null, true`);
+  contactChatId = created.bridge_resolve_chat.chat_id;
+  assert(contactChatId, 'TDLib bridge created an owner-scoped mirror');
+  eq((await rpc('public.bridge_finish_chat_request', `'${contactRequestId}', 'worker-1', '${contactChatId}', null, null`))[0].bridge_finish_chat_request,
+     true);
+  await become(U.oidc);
+  const [state] = await rpc('public.telegram_chat_request_state', `'${contactRequestId}'`);
+  eq(state.telegram_chat_request_state.status, 'succeeded');
+  eq(state.telegram_chat_request_state.chat_id, contactChatId);
+  eq((await query(`select count(*)::int as n from public.telegram_chats where chat_id = '${contactChatId}'`))[0].n,
+     1, 'the client can see only its own mirrored chat');
+});
+
+await test('a Telegram group username is never accepted as a private-contact chat', async () => {
+  await become(U.oidc);
+  const [queued] = await rpc('public.telegram_start_chat', "'@publicgroup'");
+  await becomeService();
+  const [claim] = await rpc('public.bridge_claim_chat_request', `'worker-1', '${U.oidc}', '10 seconds'`);
+  eq(claim.bridge_claim_chat_request.request_id, queued.telegram_start_chat.request_id);
+  const [groupChat] = await rpc('public.bridge_resolve_chat',
+    `'${U.oidc}', 650001, 'supergroup', 'Public group', null, null, null, null, null, true`);
+  await throws(
+    () => rpc('public.bridge_finish_chat_request', `'${queued.telegram_start_chat.request_id}', 'worker-1', '${groupChat.bridge_resolve_chat.chat_id}', null, null`),
+    /private Telegram mirror/,
+  );
+  eq((await rpc('public.bridge_finish_chat_request',
+    `'${queued.telegram_start_chat.request_id}', 'worker-1', null, 'Only Telegram users can be opened here', null`))[0].bridge_finish_chat_request,
+    true);
+  await become(U.oidc);
+  eq((await rpc('public.telegram_chat_request_state', `'${queued.telegram_start_chat.request_id}'`))[0].telegram_chat_request_state.status,
+     'failed');
+});
+
+await test('rate limits persist in SQL instead of relying on an edge process cache', async () => {
+  await become(U.oidc);
+  for (const name of ['aliceb', 'alicec', 'aliced']) {
+    const [result] = await rpc('public.telegram_start_chat', `'${name}'`);
+    assert(result.telegram_start_chat.request_id);
+  }
+  await throws(() => rpc('public.telegram_start_chat', "'alicee'"), /Too many Telegram lookups/);
+  await becomeService();
+  await exec(`update public.telegram_accounts set auth_state = 'unlinked', tg_user_id = null
+               where user_id = '${U.oidc}'`);
+  eq((await rpc('public.bridge_claim_chat_request', `'worker-1', '${U.oidc}', '1 second'`))[0].bridge_claim_chat_request,
+     null, 'the worker cannot open a new chat once the account has unlinked');
 });
 
 // ---------------------------------------------------------------------------

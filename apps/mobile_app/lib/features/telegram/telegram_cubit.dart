@@ -12,6 +12,7 @@ class TelegramPanel extends Equatable {
     this.status = TelegramLoadStatus.initial,
     this.account,
     this.chats = const <MirroredChat>[],
+    this.pushPreferences,
     this.busy = false,
     this.error,
   });
@@ -19,6 +20,7 @@ class TelegramPanel extends Equatable {
   final TelegramLoadStatus status;
   final TelegramStatus? account;
   final List<MirroredChat> chats;
+  final PushPreferences? pushPreferences;
   final bool busy;
   final Object? error;
 
@@ -28,6 +30,7 @@ class TelegramPanel extends Equatable {
     TelegramLoadStatus? status,
     TelegramStatus? account,
     List<MirroredChat>? chats,
+    PushPreferences? pushPreferences,
     bool? busy,
     Object? error = _keep,
   }) =>
@@ -35,6 +38,7 @@ class TelegramPanel extends Equatable {
         status: status ?? this.status,
         account: account ?? this.account,
         chats: chats ?? this.chats,
+        pushPreferences: pushPreferences ?? this.pushPreferences,
         busy: busy ?? this.busy,
         error: identical(error, _keep) ? this.error : error,
       );
@@ -42,7 +46,7 @@ class TelegramPanel extends Equatable {
   static const Object _keep = Object();
 
   @override
-  List<Object?> get props => <Object?>[status, account, chats, busy, error];
+  List<Object?> get props => <Object?>[status, account, chats, pushPreferences, busy, error];
 }
 
 class TelegramCubit extends Cubit<TelegramPanel> {
@@ -56,11 +60,13 @@ class TelegramCubit extends Cubit<TelegramPanel> {
       final results = await Future.wait<Object>(<Future<Object>>[
         _repository.status(),
         _repository.mirroredChats(),
+        _repository.pushPreferences(),
       ]);
       emit(state.copyWith(
         status: TelegramLoadStatus.ready,
         account: results[0] as TelegramStatus,
         chats: results[1] as List<MirroredChat>,
+        pushPreferences: results[2] as PushPreferences,
       ));
     } catch (error) {
       emit(state.copyWith(status: TelegramLoadStatus.failure, error: error));
@@ -84,6 +90,17 @@ class TelegramCubit extends Cubit<TelegramPanel> {
       emit(state.copyWith(busy: false, error: error));
     } finally {
       emit(state.copyWith(busy: false));
+    }
+  }
+
+  Future<void> setPushPreferences({bool? telegram, bool? preview}) async {
+    emit(state.copyWith(busy: true, error: null));
+    try {
+      // Do not optimistically show a preview switch that the server refused.
+      final saved = await _repository.setPushPreferences(telegram: telegram, preview: preview);
+      emit(state.copyWith(pushPreferences: saved, busy: false));
+    } catch (error) {
+      emit(state.copyWith(busy: false, error: AppException.wrap(error)));
     }
   }
 

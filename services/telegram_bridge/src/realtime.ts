@@ -1,7 +1,7 @@
 /**
  * Supabase Realtime as a *latency* optimisation, nothing more.
  *
- * The manager already polls the two queues, so this subscription only removes up
+ * The manager already polls the queues, so this subscription only removes up
  * to `BRIDGE_POLL_INTERVAL_MS` of tail latency when a message is sent or a user
  * enters a code. It is therefore allowed to fail, disconnect, or never exist
  * (e.g. a self-hosted instance without Realtime) and the bridge is still correct
@@ -29,7 +29,7 @@ type RealtimeClient = {
   realtime: { setAuth: (token: string) => void; disconnect: () => Promise<void> };
 };
 
-export type RealtimeWake = (input: { kind?: 'outbox' | 'link' | 'relink' | 'media'; user_ids?: string[] }) => void;
+export type RealtimeWake = (input: { kind?: 'outbox' | 'notify' | 'link' | 'relink' | 'media'; user_ids?: string[] }) => void;
 
 export type RealtimeHandle = {
   close: () => Promise<void>;
@@ -38,6 +38,7 @@ export type RealtimeHandle = {
 
 const TABLES = [
   { schema: 'public', table: 'telegram_outbox', event: 'INSERT', kind: 'outbox' as const, ownerKey: 'owner_user_id' },
+  { schema: 'public', table: 'notify_requests', event: 'INSERT', kind: 'notify' as const, ownerKey: 'user_id' },
   {
     schema: 'public',
     table: 'telegram_link_requests',

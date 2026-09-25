@@ -90,8 +90,54 @@ describe('loadConfig', () => {
     assert.equal(simulated.transport, 'memory');
   });
 
+  it('rejects an unsupported stateless login-token export rather than pretending failover works', () => {
+    assert.throws(() => loadConfig(testEnv({ TELEGRAM_EXPORT_LOGIN_TOKEN: 'true' })),
+      (error: unknown) => error instanceof ConfigError && /TELEGRAM_EXPORT_LOGIN_TOKEN.*persistent/.test(error.message));
+  });
+
+  it('accepts a 32-byte base64 TDLib key, not hex or malformed bytes', () => {
+    const key = Buffer.alloc(32, 0x17).toString('base64');
+    assert.equal(loadConfig(testEnv({ TDLIB_DB_KEY: key })).databaseEncryptionKey, key);
+    assert.throws(() => loadConfig(testEnv({ TDLIB_DB_KEY: 'ab'.repeat(32) })),
+      (error: unknown) => error instanceof ConfigError && /TDLIB_DB_KEY/.test(error.message));
+    assert.throws(() => loadConfig(testEnv({ TDLIB_DB_KEY: 'not-base64' })), ConfigError);
+  });
+
   it('parses ALLOWED_ORIGINS into a list', () => {
     const config = loadConfig(testEnv({ ALLOWED_ORIGINS: 'https://a.example, https://b.example ,' }));
     assert.deepEqual(config.allowedOrigins, ['https://a.example', 'https://b.example']);
+  });
+
+  it('never silently treats a misspelled or absent environment as development', () => {
+    assert.throws(() => loadConfig(testEnv({ MESSENGERX_ENV: 'prod' })),
+      (error: unknown) => error instanceof ConfigError && /messengerxEnv/.test(error.message));
+    assert.throws(() => loadConfig(testEnv({ MESSENGERX_ENV: undefined })),
+      (error: unknown) => error instanceof ConfigError && /BRIDGE_DATA_DIR/.test(error.message));
+  });
+
+  it('fails closed for hosted workers without persistent encrypted sessions and signed ingress', () => {
+    const hosted = testEnv({
+      MESSENGERX_ENV: 'production',
+      BRIDGE_TRANSPORT: 'koffi',
+      BRIDGE_DATA_DIR: '/var/lib/messengerx-bridge',
+      TDLIB_DB_KEY: Buffer.alloc(32, 23).toString('base64'),
+      BRIDGE_TOKEN: 'a'.repeat(40),
+      BRIDGE_HMAC_SECRET: 'b'.repeat(40),
+    });
+    assert.equal(loadConfig(hosted).messengerxEnv, 'production');
+    for (const [name, bad, message] of [
+      ['SUPABASE_URL', 'http://localhost:54321', /SUPABASE_URL/],
+      ['BRIDGE_TOKEN', 'weak-but-enough-for-schema', /BRIDGE_TOKEN/],
+      ['BRIDGE_HMAC_SECRET', undefined, /BRIDGE_HMAC_SECRET/],
+      ['SEAL_KEY', undefined, /SEAL_KEY/],
+      ['TDLIB_DB_KEY', undefined, /TDLIB_DB_KEY/],
+      ['BRIDGE_DATA_DIR', '/tmp/disposable', /BRIDGE_DATA_DIR/],
+      ['BRIDGE_TRANSPORT', 'memory', /BRIDGE_TRANSPORT/],
+      ['INGEST_MODE', 'rpc', /INGEST_MODE/],
+    ] as const) {
+      assert.throws(() => loadConfig({ ...hosted, [name]: bad }), message, name);
+    }
+    assert.throws(() => loadConfig({ ...hosted, MESSENGERX_ENV: 'staging', BRIDGE_TRANSPORT: 'memory' }),
+      /BRIDGE_TRANSPORT/);
   });
 });

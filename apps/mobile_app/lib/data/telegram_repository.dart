@@ -56,6 +56,30 @@ class TelegramRepository {
 
   Future<void> unlink() => _call(<String, Object?>{'action': 'unlink'});
 
+  /// Start an owner-scoped TDLib lookup of a *public* Telegram @username, not a
+  /// phone-number lookup and not a request to send a message to an arbitrary ID.
+  Future<ChatLookup> startPublicChat(String username) async {
+    final result = await _call(<String, Object?>{'action': 'startChat', 'username': username});
+    final id = result.requestId;
+    if (id == null) throw const AppException('telegram', 'Telegram did not create a chat lookup.');
+    return ChatLookup.fromMap(result.data);
+  }
+
+  /// Reads only the current user's request projection (the underlying queue
+  /// is not readable by clients). The worker returns a chat UUID after it has
+  /// independently resolved a private Telegram peer and mapped the mirror.
+  Future<ChatLookup> publicChatRequestState(String requestId) async {
+    try {
+      final raw = await _client.rpc<dynamic>('telegram_chat_request_state', params: <String, Object?>{
+        'p_request_id': requestId,
+      });
+      if (raw is! Map) throw const AppException('not_found', 'This Telegram lookup is no longer available.');
+      return ChatLookup.fromMap(Map<String, dynamic>.from(raw));
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
   /// Chats the bridge discovered for this account, with the per-chat switch state.
   /// `telegram_chats` is owner-scoped by RLS, so the panel can read it directly.
   Future<List<MirroredChat>> mirroredChats({int limit = 200}) async {
@@ -70,6 +94,34 @@ class TelegramRepository {
           .order('last_inbound_at', ascending: false, nullsFirst: false)
           .limit(limit);
       return rows.map(MirroredChat.fromMap).toList(growable: false);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  /// These preferences live on the signed-in profile, not the Telegram session:
+  /// preview privacy also applies to banners while the app is in the foreground.
+  Future<PushPreferences> pushPreferences() async {
+    try {
+      final row = await _client
+          .from('profiles')
+          .select('push_telegram, push_preview')
+          .eq('id', _currentUid())
+          .single();
+      return PushPreferences.fromMap(Map<String, dynamic>.from(row));
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  Future<PushPreferences> setPushPreferences({bool? telegram, bool? preview}) async {
+    try {
+      final raw = await _client.rpc<dynamic>('set_push_preferences', params: <String, Object?>{
+        'p_push_telegram': telegram,
+        'p_push_preview': preview,
+      });
+      if (raw is! Map) throw const AppException('database', 'Could not save your notification preferences.');
+      return PushPreferences.fromMap(Map<String, dynamic>.from(raw));
     } catch (error, stack) {
       throw AppException.wrap(error, stack);
     }
@@ -151,6 +203,40 @@ class TelegramRepository {
       throw AppException.wrap(error, stack);
     }
   }
+}
+
+/// Shared by the Telegram settings panel and the foreground banner host.
+/// Previews fail closed (false) if a response lacks the field.
+class ChatLookup {
+  const ChatLookup({required this.requestId, required this.status, this.chatId, this.error, this.expiresAt});
+
+  final String requestId;
+  final String status;
+  final String? chatId;
+  final String? error;
+  final DateTime? expiresAt;
+
+  bool get finished => status == 'succeeded' || status == 'failed';
+
+  factory ChatLookup.fromMap(Map<String, dynamic> map) => ChatLookup(
+        requestId: asString(map['request_id']),
+        status: asString(map['status'], fallback: 'queued'),
+        chatId: map['chat_id'] as String?,
+        error: map['error'] as String?,
+        expiresAt: parseTimestamp(map['expires_at']),
+      );
+}
+
+class PushPreferences {
+  const PushPreferences({required this.telegram, required this.preview});
+
+  final bool telegram;
+  final bool preview;
+
+  factory PushPreferences.fromMap(Map<String, dynamic> row) => PushPreferences(
+        telegram: row['push_telegram'] == true,
+        preview: row['push_preview'] == true,
+      );
 }
 
 class LinkResult {

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { loadConfig, type BridgeConfig } from '../src/config.js';
-import type { AccountContext, LinkClaim, OutboxRow } from '../src/supabase.js';
+import type { AccountContext, LinkClaim, NotifyRow, OutboxRow } from '../src/supabase.js';
 
 export const HEX_KEY = '0f'.repeat(32);
 
@@ -142,6 +142,24 @@ export function outboxRow(overrides: Partial<OutboxRow> = {}): OutboxRow {
     attempts: 1,
     session_ref: 'worker-test:aaaaaaaa',
     tg_user_id: '100200300',
+    ...overrides,
+  };
+}
+
+export function notifyRow(overrides: Partial<NotifyRow> = {}): NotifyRow {
+  return {
+    notify_id: 'ffffffff-0000-4000-8000-000000000006',
+    user_id: OWNER,
+    chat_id: CHAT_ID,
+    sender_name: 'Dilnoza',
+    preview: 'salom, qalaysiz?',
+    folded: 1,
+    tg_self_chat_id: '777001',
+    tg_user_id: '777001',
+    session_ref: 'worker-test:aaaaaaaa',
+    attempts: 1,
+    max_attempts: 4,
+    queued_at: new Date().toISOString(),
     ...overrides,
   };
 }

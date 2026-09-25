@@ -19,7 +19,13 @@ void registerDependencies({required AppEnv env, required SupabaseClient client})
   sl
     ..registerLazySingleton<AppEnv>(() => env)
     ..registerLazySingleton<SupabaseClient>(() => client)
-    ..registerLazySingleton<AccountRepository>(() => AccountRepository(client))
+    ..registerLazySingleton<AccountRepository>(
+      () => AccountRepository(
+        client,
+        telegramLoginEnabled: env.telegramOidcEnabled,
+        webRedirectUrl: env.webRedirectUrl,
+      ),
+    )
     ..registerLazySingleton<ChatRepository>(() => ChatRepository(client))
     ..registerLazySingleton<TelegramRepository>(() => TelegramRepository(client))
     ..registerLazySingleton<VoiceService>(VoiceService.new)

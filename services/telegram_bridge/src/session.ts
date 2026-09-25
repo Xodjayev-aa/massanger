@@ -27,12 +27,13 @@ import {
 import {
   mapIncomingMessage,
   planOutbound,
+  renderSelfNotice,
   sendOptions,
   type OutboundSend,
   type ResolvedMedia,
   type UploadedMedia,
 } from './render.js';
-import type { AccountContext, LinkClaim, OutboxRow } from './supabase.js';
+import type { AccountContext, LinkClaim, NotifyRow, OutboxRow } from './supabase.js';
 import { SupabaseBridge, SupabaseError } from './supabase.js';
 import {
   KoffiTransport,
@@ -62,6 +63,7 @@ export type SessionOptions = {
 };
 
 export type PumpResult = { sent: number; failed: number; parked: number; presence: number; reads: number };
+export type NoticeResult = { sent: number; failed: number; parked: number; skipped: number };
 
 export const TD_INT64_MAX = '9223372036854775807';
 
@@ -107,6 +109,10 @@ export class TelegramSession {
 
   #state: SessionState = 'init';
   #chats = new Map<string, ChatInfo>();
+  /** Own Telegram id and any discovered Saved Messages chat ids: never mirror these. */
+  #selfChatIds = new Set<string>();
+  /** A sent notice whose DB completion failed: retry the *completion*, not TDLib. */
+  #deliveredNotices = new Map<string, { tgMessageId: string | null; selfChatId: string }>();
   #chatQueue = new KeyedQueue<void>();
   #uploaded = new Map<number, UploadedMedia>();
   #tgMessageToOutbox = new Map<string, number>();
@@ -128,6 +134,8 @@ export class TelegramSession {
     sent: 0,
     failed: 0,
     parked: 0,
+    notices: 0,
+    notices_failed: 0,
     ingested: 0,
     duplicates: 0,
     downloads: 0,
@@ -139,6 +147,7 @@ export class TelegramSession {
 
   constructor(private readonly options: SessionOptions) {
     this.ownerUserId = options.context.user_id;
+    if (options.context.tg_user_id != null) this.#selfChatIds.add(String(options.context.tg_user_id));
     this.dataDir = path.join(options.config.dataDir, `tg-${this.ownerUserId}`);
     this.log =
       options.log ?? rootLogger.child({ owner: options.context.username, session: options.config.workerId });
@@ -236,6 +245,7 @@ export class TelegramSession {
       this.log.warn('logOut failed; destroying the session anyway', { error: (error as Error).message });
     }
     await this.options.db.setAccountState({ userId, authState: 'unlinked', note: 'unlinked from the app' });
+    await this.options.db.failNotify(userId, 'telegram account was unlinked').catch(() => undefined);
     await this.stop('logout');
   }
 
@@ -298,6 +308,154 @@ export class TelegramSession {
     result.presence = await this.#pumpPresence();
     result.reads = await this.#pumpReads();
     return result;
+  }
+
+  // ── offline notices: delivered by this recipient's own TDLib session ─────
+
+  async deliverNotices(rows: NotifyRow[]): Promise<NoticeResult> {
+    const result: NoticeResult = { sent: 0, failed: 0, parked: 0, skipped: 0 };
+    this.counters.lastPumpAt = Date.now();
+    // Saved Messages is one chat. Serialize sends through the same per-chat
+    // queue as the outbox, rather than racing two wake-ups for this account.
+    for (const row of rows) {
+      const chatId = String(row.tg_self_chat_id ?? row.tg_user_id ?? 'self');
+      await this.#chatQueue.enqueue(`send:${chatId}`, async () => {
+        const outcome = await this.#deliverOneNotice(row);
+        result[outcome]++;
+      });
+    }
+    return result;
+  }
+
+  async #deliverOneNotice(row: NotifyRow): Promise<keyof NoticeResult> {
+    const db = this.options.db;
+    if (row.user_id !== this.ownerUserId) {
+      this.log.error('notice was claimed for the wrong account', { notify_id: row.notify_id });
+      await db.completeNotify({ notifyId: row.notify_id, state: 'failed', error: 'wrong account session' });
+      this.counters.notices_failed++;
+      return 'failed';
+    }
+    const alreadySent = this.#deliveredNotices.get(row.notify_id);
+    if (alreadySent) {
+      // The first send succeeded but PostgREST was unavailable for the receipt.
+      // A live session can recover the completion after the lease expires without
+      // placing a second Saved Messages bubble on the user's other devices.
+      try {
+        await db.completeNotify({ notifyId: row.notify_id, state: 'sent', ...alreadySent });
+        this.#deliveredNotices.delete(row.notify_id);
+        return 'skipped'; // the original send was already counted
+      } catch (error) {
+        this.log.warn('notice completion still unavailable', { error: (error as Error).message });
+        return 'parked';
+      }
+    }
+    if (!this.ready) {
+      await db.completeNotify({ notifyId: row.notify_id, state: 'queued', error: 'session not authorised', retrySeconds: 20 });
+      return 'parked';
+    }
+
+    const chatId = row.tg_self_chat_id ?? row.tg_user_id;
+    if (chatId == null || !/^\d+$/.test(String(chatId)) ||
+        row.tg_user_id == null || !/^\d+$/.test(String(row.tg_user_id))) {
+      await db.completeNotify({ notifyId: row.notify_id, state: 'failed', error: 'Saved Messages chat is unknown' });
+      this.counters.notices_failed++;
+      return 'failed';
+    }
+    const fallback = String(chatId);
+    this.#selfChatIds.add(fallback);
+    this.#selfChatIds.add(String(row.tg_user_id));
+
+    try {
+      // TDLib can require a private chat to be created/loaded before sendMessage
+      // accepts its id. This is our own Telegram user id, *not* the sender's.
+      // The returned chat id is authoritative even if a cached value was stale.
+      const self = await this.client.request<TdObject>('createPrivateChat', {
+        user_id: String(row.tg_user_id), force: false,
+      });
+      const target = String(self.id ?? fallback);
+      this.#selfChatIds.add(target);
+      await this.#pace();
+      // A queue claim is not permission to send forever: an app read, mute,
+      // foreground heartbeat, or preference change may have happened while we
+      // waited for chat creation or Telegram's per-user rate limit.
+      if (!(await db.noticeOwed(row.notify_id, row.preview))) {
+        await db.completeNotify({ notifyId: row.notify_id, state: 'skipped' });
+        return 'skipped';
+      }
+      const response = await this.client.request<TdObject>('sendMessage', {
+        chat_id: target,
+        options: {
+          '@type': 'messageSendOptions',
+          disable_notification: false,
+          from_background: true,
+          // No sending_id: this isn't an app message and must never correlate
+          // with a telegram_outbox bubble on the echo path.
+        },
+        input_message_content: {
+          '@type': 'inputMessageText',
+          text: { '@type': 'formattedText', text: renderSelfNotice(row), entities: [] },
+          link_preview_options: { '@type': 'linkPreviewOptions', is_disabled: true },
+        },
+      });
+      const actualChat = String(response.chat_id ?? target);
+      this.#selfChatIds.add(actualChat);
+      const receipt = { tgMessageId: response.id == null ? null : String(response.id), selfChatId: actualChat };
+      if (this.#deliveredNotices.size > 1_000) this.#deliveredNotices.delete(this.#deliveredNotices.keys().next().value ?? '');
+      this.#deliveredNotices.set(row.notify_id, receipt);
+      try {
+        const completed = await db.completeNotify({ notifyId: row.notify_id, state: 'sent', ...receipt });
+        this.#deliveredNotices.delete(row.notify_id);
+        if (!completed) {
+          // Read/mute won the race while Telegram accepted the send. The database
+          // must *not* resurrect it, even though TDLib cannot unsend that message.
+          this.log.debug('notice completed after its lease was cancelled', { notify_id: row.notify_id });
+        }
+      } catch (error) {
+        // Do NOT pass this to the usual failure handler: it would requeue a send
+        // that TDLib already accepted. The in-memory receipt above lets the same
+        // session finish it when the DB lease is reclaimed.
+        this.log.warn('notice sent; will retry its database completion', { error: (error as Error).message });
+      }
+      this.counters.notices++;
+      return 'sent';
+    } catch (error) {
+      return this.#handleNoticeFailure(row, error);
+    }
+  }
+
+  async #handleNoticeFailure(row: NotifyRow, error: unknown): Promise<keyof NoticeResult> {
+    const db = this.options.db;
+    const message = error instanceof Error ? error.message : String(error);
+    const flood = floodWaitSeconds(message) ?? (error instanceof TdLibError ? error.floodWaitSeconds : null);
+    const fatal = /AUTH_KEY_UNREGISTERED|AUTH_KEY_INVALID|SESSION_REVOKED|SESSION_TERMINATED|USER_DEACTIVATED/i.test(message);
+    if (fatal) {
+      this.#authState = 'revoked';
+      this.#state = 'awaiting_auth';
+      await db.setAccountState({ userId: this.ownerUserId, authState: 'needs_reauth', error: message }).catch(() => undefined);
+      await db.failPendingSends(this.ownerUserId, 'telegram session was revoked').catch(() => undefined);
+      await db.failNotify(this.ownerUserId, 'telegram session was revoked').catch(() => undefined);
+      this.counters.notices_failed++;
+      return 'failed';
+    }
+
+    const badChat = /PEER_ID_INVALID|CHAT_NOT_FOUND|CHAT_WRITE_FORBIDDEN/i.test(message);
+    const exhausted = Number(row.attempts ?? 0) >= Number(row.max_attempts ?? 4);
+    const permanent = /MESSAGE_EMPTY|INPUT_FETCH_FAILED/i.test(message) ||
+      (error instanceof SupabaseError && !error.retryable);
+    if (exhausted || permanent) {
+      this.counters.notices_failed++;
+      await db.completeNotify({ notifyId: row.notify_id, state: 'failed', error: message }).catch(() => undefined);
+      return 'failed';
+    }
+
+    await db.completeNotify({
+      notifyId: row.notify_id,
+      state: 'queued',
+      error: message,
+      resetSelfChat: badChat,
+      retrySeconds: flood !== null ? Math.max(2, flood + 2) : badChat ? 60 : 30,
+    }).catch((dbError: Error) => this.log.warn('notice retry could not be recorded', { error: dbError.message }));
+    return 'parked';
   }
 
   async #sendOne(row: OutboxRow): Promise<'sent' | 'failed' | 'parked'> {
@@ -372,10 +530,14 @@ export class TelegramSession {
     const request: Record<string, unknown> = {
       chat_id: chatId,
       options,
-      input_message_content: send.content,
-      message_self_destruct_ttl: 0,
-      ...(send.replyToMessageId ? { reply_to_message_id: send.replyToMessageId } : {}),
-      ...(send.clearDraft ? { clear_draft: true } : {}),
+      // TDLib 1.8.43 uses an InputMessageReplyTo object, not the older
+      // reply_to_message_id request field. Clear-draft belongs to text content.
+      ...(send.replyToMessageId
+        ? { reply_to: { '@type': 'inputMessageReplyToMessage', message_id: send.replyToMessageId } }
+        : {}),
+      input_message_content: send.content['@type'] === 'inputMessageText'
+        ? { ...send.content, clear_draft: !!send.clearDraft }
+        : send.content,
     };
     try {
       return await this.client.request<TdObject>('sendMessage', request);
@@ -385,7 +547,7 @@ export class TelegramSession {
       // without the reply instead of losing the message.
       if (error instanceof TdLibError && /MESSAGE_TO_REPLY_NOT_FOUND/i.test(error.message) && send.replyToMessageId) {
         this.log.info('reply target unknown on telegram; sending without the reply link');
-        const { reply_to_message_id: _dropped, ...rest } = request;
+        const { reply_to: _dropped, ...rest } = request;
         return await this.client.request<TdObject>('sendMessage', rest);
       }
       throw error;
@@ -557,6 +719,13 @@ export class TelegramSession {
 
   // ── inbound updates ───────────────────────────────────────────────────────
 
+  #isSelfChat(chatId: string | number): boolean {
+    const id = String(chatId);
+    if (this.#selfChatIds.has(id)) return true;
+    const known = this.#chats.get(id);
+    return known?.type === 'private' && known.peerUserId != null && this.#selfChatIds.has(known.peerUserId);
+  }
+
   #onUpdate(update: TdObject): void {
     const type = update['@type'];
     switch (type) {
@@ -615,7 +784,7 @@ export class TelegramSession {
       case 'updateDeleteMessages': {
         const ids = (update.message_ids as (string | number)[] | undefined) ?? [];
         const chatId = Number(update.chat_id ?? NaN);
-        if (!Number.isFinite(chatId) || ids.length === 0) return;
+        if (!Number.isFinite(chatId) || ids.length === 0 || this.#isSelfChat(chatId)) return;
         void this.#chatQueue.enqueue(`in:${chatId}`, async () => {
           for (const id of ids) {
             this.#push({
@@ -633,7 +802,7 @@ export class TelegramSession {
       case 'updateReadOutboxChatHistory': {
         // The peer read our messages → the app's ticks turn blue.
         const chatId = Number(update.chat_id ?? NaN);
-        if (!Number.isFinite(chatId)) return;
+        if (!Number.isFinite(chatId) || this.#isSelfChat(chatId)) return;
         void this.#chatQueue.enqueue(`in:${chatId}`, async () => {
           this.#push({
             type: 'read',
@@ -652,7 +821,7 @@ export class TelegramSession {
       case 'updateChatReadInbox': {
         // We read the chat *on Telegram* → clear the badge in the app.
         const chatId = Number(update.chat_id ?? NaN);
-        if (!Number.isFinite(chatId)) return;
+        if (!Number.isFinite(chatId) || this.#isSelfChat(chatId)) return;
         const upTo = Number(update.max_read_message_id ?? update.last_read_inbox_message_id ?? NaN);
         void this.options.db
           .markInboxRead(this.ownerUserId, chatId, Number.isFinite(upTo) ? upTo : undefined)
@@ -662,7 +831,7 @@ export class TelegramSession {
       case 'updateUserChatAction': {
         const chatId = Number(update.chat_id ?? NaN);
         const chat = this.#chats.get(String(chatId));
-        if (!Number.isFinite(chatId) || !chat || chat.type !== 'private') return; // groups: see 00010
+        if (!Number.isFinite(chatId) || !chat || chat.type !== 'private' || this.#isSelfChat(chatId)) return; // groups: see 00010
         void this.options.db.reportTyping(this.ownerUserId, chatId, String((update.action as TdObject)?.['@type'] ?? ''));
         return;
       }
@@ -705,6 +874,7 @@ export class TelegramSession {
 
   async #ingestMessage(chatIdNumber: number, message: TdObject, isEdit: boolean): Promise<void> {
     const chatId = String(chatIdNumber);
+    if (this.#isSelfChat(chatId)) return; // Saved Messages is the notice transport, never an app thread.
     const info = this.#chats.get(chatId);
     if (!info || !info.chatId) {
       // Unknown chat: resolve it first (this is how a new Telegram conversation
@@ -712,6 +882,7 @@ export class TelegramSession {
       const chat = await this.client.request<TdObject>('getChat', { chat_id: chatId }).catch(() => null);
       if (chat) await this.#registerChat(chat, { silent: true });
     }
+    if (this.#isSelfChat(chatId)) return; // getChat may have revealed a non-obvious self-chat id.
     const known = this.#chats.get(chatId);
 
     const isOutgoing = message.is_outgoing === true;
@@ -1002,6 +1173,10 @@ export class TelegramSession {
         sessionRef: this.sessionRef,
       })
       .catch(() => undefined);
+    // On a restored TDLib session the server's user id is authoritative even
+    // if the cached account context predates a re-link.
+    const me = await this.client.request<TdObject>('getMe', {}).catch(() => null);
+    if (me?.id != null) this.#selfChatIds.add(String(me.id));
     await this.#prepareChats();
     await this.options.db
       .setAccountState({ userId: this.ownerUserId, authState: 'linked', note: 'connected', lastSync: true })
@@ -1035,18 +1210,54 @@ export class TelegramSession {
       device_model: config.deviceModel,
       system_version: `${process.platform} ${process.arch}`,
       application_version: config.applicationVersion,
-      ignore_sensitive_content_restrictions: false,
-      use_storage_manager: true,
     };
     const databaseEncryptionKey = config.databaseEncryptionKey;
     if (databaseEncryptionKey) {
-      params.database_encryption_key = Array.from(Buffer.from(databaseEncryptionKey, 'base64'));
-      params.enable_database_encryption = true;
+      // The tdjson `bytes` type is a base64 string in JSON, not an array of
+      // byte values. A different value here makes a restored session unreadable.
+      params.database_encryption_key = databaseEncryptionKey;
     }
 
     await this.client.request('setTdlibParameters', { '@type': 'setTdlibParameters', ...params }, {
       timeoutMs: Math.max(15_000, config.requestTimeoutMs),
     });
+  }
+
+  /**
+   * Resolve an explicit public @username *in this owner's TDLib session*, never
+   * a caller-supplied Telegram numeric id. Only private chats can be returned;
+   * channels/groups and Saved Messages are not new person-to-person threads.
+   * The database still verifies that the returned chat belongs to this owner
+   * before it completes the request.
+   */
+  async openPublicChat(username: string): Promise<string> {
+    if (!this.ready || !this.options.context.mirror_to_app ||
+        !['both', 'to_telegram'].includes(this.options.context.sync_direction)) {
+      throw new Error('Telegram session is not ready for new chats');
+    }
+    if (!/^[a-z][a-z0-9_]{4,31}$/.test(username)) {
+      throw new Error('invalid public Telegram username');
+    }
+    // Never reuse a stale local TDLib directory for a different account: the
+    // database's linked tg_user_id is the owner identity, not the disk folder.
+    const me = await this.client.request<TdObject>('getMe', {});
+    if (me.id == null || String(me.id) !== String(this.options.context.tg_user_id)) {
+      throw new Error('TDLib identity does not match the linked Telegram account');
+    }
+
+    const chat = await this.client.request<TdObject>('searchPublicChat', { username });
+    const type = chat.type as TdObject | undefined;
+    const peerId = type?.user_id == null ? '' : String(type.user_id);
+    if (type?.['@type'] !== 'chatTypePrivate' || !/^\d{1,20}$/.test(peerId)) {
+      throw new Error('The Telegram username is not a private user');
+    }
+    if (peerId === String(me.id)) throw new Error('Saved Messages cannot be opened as a new chat');
+
+    await this.#registerChat(chat);
+    const info = this.#chats.get(String(chat.id));
+    if (!info?.chatId) throw new Error('Could not mirror that Telegram chat yet');
+    this.counters.lastPumpAt = Date.now();
+    return info.chatId;
   }
 
   async #prepareChats(): Promise<void> {
@@ -1083,10 +1294,18 @@ export class TelegramSession {
     const tgChatId = String(chat.id ?? '');
     if (!tgChatId || tgChatId === 'undefined') return;
 
-    const type = tdChatType(chat) ?? 'private';
+    // tdChatType accepts a TDLib chatType object, *not* the outer chat object.
+    // Treat unknown types as unsupported rather than silently mirroring a
+    // supergroup/channel as a private conversation.
+    const type = tdChatType((chat.type as TdObject | undefined) ?? {});
+    if (!type) return;
     const title = typeof chat.title === 'string' ? chat.title : null;
     const peerUserId =
       type === 'private' ? String((chat.type as TdObject | undefined)?.user_id ?? '') || null : null;
+    if (this.#isSelfChat(tgChatId) || (peerUserId && this.#selfChatIds.has(peerUserId))) {
+      this.#selfChatIds.add(tgChatId);
+      return; // no resolveChat / openChat / inbound history for Saved Messages
+    }
 
     let peer: { first?: string | null; last?: string | null; username?: string | null; avatar?: string | null } = {};
     if (peerUserId) {

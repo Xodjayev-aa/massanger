@@ -13,7 +13,7 @@ import { signRequest } from './crypto.ts';
 import { log } from './logger.ts';
 
 export type WakeHint = {
-  kind: 'outbox' | 'link' | 'relink' | 'media';
+  kind: 'outbox' | 'link' | 'relink' | 'media' | 'chat';
   user_ids: string[];
   /** free-form ids for logging only; the worker re-reads from Postgres */
   ids?: string[];

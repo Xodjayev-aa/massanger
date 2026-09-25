@@ -14,9 +14,9 @@
 
 begin;
 
--- Both accounts are seeded as email identities, which `handle_new_user()` marks
--- `active` immediately; a Google identity would sit in `pending_verification`
--- until the age gate passes. Password for both is "messengerx" (local only).
+-- Both accounts are seeded as local email identities. Migration 00013 retired
+-- the unprovable Google account-age gate; new Google/Telegram identities are
+-- active unless a moderator restricted them. Password is "messengerx" (local only).
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
   raw_app_meta_data, raw_user_meta_data, created_at, updated_at, is_sso_user

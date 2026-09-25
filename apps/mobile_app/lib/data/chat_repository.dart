@@ -1,5 +1,7 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:image_picker/image_picker.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -90,6 +92,21 @@ class ChatRepository {
       // A failed read receipt is cosmetic: never surface it, but do not swallow
       // an auth failure, which would hide a real problem from the user.
       if (error is AppException && error.code == '42501') rethrow;
+    }
+  }
+
+  /// The RLS policy only lets a participant update their own row. The notice
+  /// trigger cancels any queued Saved Messages delivery in the same transaction
+  /// when this is muted; the foreground banner host reads the same row.
+  Future<void> setMuted(String chatId, bool muted) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) throw const AppException('auth', 'Sign in first.');
+    try {
+      await _client.from('chat_participants').update(<String, Object?>{
+        'muted_until': muted ? DateTime.now().toUtc().add(const Duration(hours: 8)).toIso8601String() : null,
+      }).eq('user_id', userId).eq('chat_id', chatId);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
     }
   }
 
@@ -204,17 +221,17 @@ class ChatRepository {
   /// Uploads a picked photo into the chat's folder. The first path segment is the
   /// chat id because the storage policy resolves membership from it, exactly like
   /// the Telegram bridge does for mirrored media.
-  Future<ImageMedia> uploadImage({required String chatId, required File file, String? caption}) async {
-    final size = await _sizeOf(file);
+  Future<ImageMedia> uploadImage({required String chatId, required XFile file, String? caption}) async {
+    final size = await file.length();
     if (size > 20 * 1024 * 1024) {
       throw const AppException('storage', 'Photos must stay under 20 MB.');
     }
-    final extension = _extensionOf(file.path, fallback: '.jpg');
+    final extension = _extensionOf(file.name, fallback: '.jpg');
     final objectPath = '$chatId/app/${DateTime.now().microsecondsSinceEpoch}$extension';
     try {
       await _client.storage
           .from('images')
-          .upload(objectPath, file, fileOptions: FileOptions(contentType: _mimeFor(extension)));
+          .uploadBinary(objectPath, await file.readAsBytes(), fileOptions: FileOptions(contentType: _mimeFor(extension)));
       return ImageMedia(
         bucket: 'images',
         storagePath: objectPath,
@@ -227,8 +244,8 @@ class ChatRepository {
     }
   }
 
-  Future<VoiceMedia> uploadVoice({required String chatId, required File file, required Duration duration, required List<int> waveform}) async {
-    final size = await _sizeOf(file);
+  Future<VoiceMedia> uploadVoice({required String chatId, required Uint8List bytes, required Duration duration, required List<int> waveform}) async {
+    final size = bytes.length;
     if (size > 10 * 1024 * 1024) {
       throw const AppException('storage', 'Voice notes must stay under 10 MB.');
     }
@@ -236,7 +253,7 @@ class ChatRepository {
     try {
       await _client.storage
           .from('voice-notes')
-          .upload(objectPath, file, fileOptions: const FileOptions(contentType: 'audio/wav'));
+          .uploadBinary(objectPath, bytes, fileOptions: const FileOptions(contentType: 'audio/wav'));
       return VoiceMedia(
         bucket: 'voice-notes',
         storagePath: objectPath,
@@ -335,23 +352,18 @@ class ChatRepository {
     );
   }
 
-  static Future<int> _sizeOf(File file) async {
-    try {
-      return await file.length();
-    } catch (_) {
-      return 0;
-    }
-  }
-
   static String _extensionOf(String path, {required String fallback}) {
     final index = path.lastIndexOf('.');
     if (index < 0 || index < path.length - 6) return fallback;
-    return path.substring(index).toLowerCase();
+    final extension = path.substring(index).toLowerCase();
+    return const <String>{'.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif'}.contains(extension)
+        ? extension : fallback;
   }
 
   static String _mimeFor(String extension) => switch (extension) {
         '.png' => 'image/png',
-        '.heic' => 'image/heic',
+        '.avif' => 'image/avif',
+        '.jpeg' => 'image/jpeg',
         '.webp' => 'image/webp',
         '.gif' => 'image/gif',
         _ => 'image/jpeg',

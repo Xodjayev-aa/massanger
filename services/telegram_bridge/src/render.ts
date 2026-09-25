@@ -143,6 +143,30 @@ export function renderMarkdown(text: string, entities: TdObject[] | undefined): 
   return out;
 }
 
+// ── offline self-chat notices ───────────────────────────────────────────────
+
+export type SelfNoticeInput = {
+  sender_name: string;
+  preview: string;
+  folded: number;
+};
+
+/**
+ * Saved Messages displays this as a plain text message (not markdown — a sender
+ * called `**Alice**` must not inject TDLib entities). No app deep link is
+ * implied: the unread badge in MessengerX is the authority on what to open.
+ */
+export function renderSelfNotice(input: SelfNoticeInput): string {
+  const preview = (input.preview ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 140);
+  const folded = Math.max(1, Math.min(999, Math.trunc(Number(input.folded) || 1)));
+  if (!preview) {
+    return `MessengerX · ${folded === 1 ? 'new message' : `${folded} new messages`}`;
+  }
+  const name = (input.sender_name ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
+  const header = name && name !== 'MessengerX' ? `MessengerX · ${name}` : 'MessengerX';
+  return `${header}\n${preview}${folded > 1 ? `\n+${folded - 1} more` : ''}`;
+}
+
 // ── outbound ────────────────────────────────────────────────────────────────
 
 export type ResolvedMedia = {
@@ -160,7 +184,7 @@ export type OutboundSend = {
   content: TdObject;
   /** Telegram message the first chunk replies to. */
   replyToMessageId?: string | null;
-  /** Only the last chunk clears the draft (it is a per-send flag, not per-content). */
+  /** Only the last text chunk clears the draft (`inputMessageText` owns this flag). */
   clearDraft?: boolean;
 };
 
@@ -190,9 +214,9 @@ export function planOutbound(
   const caption = typeof row.payload?.media?.caption === 'string' ? row.payload.media.caption : '';
   const mime = media?.mime ?? String(row.payload?.media?.mime ?? '');
   const replyTo = options.replyToMessageId ? String(options.replyToMessageId) : null;
-  const send = (content: TdObject, last: boolean): OutboundSend => ({
+  const send = (content: TdObject, last: boolean, first = true): OutboundSend => ({
     content,
-    ...(replyTo ? { replyToMessageId: replyTo } : {}),
+    ...(replyTo && first ? { replyToMessageId: replyTo } : {}),
     clearDraft: last,
   });
 
@@ -201,12 +225,9 @@ export function planOutbound(
     const waveform = waveformToBase64(normalizeWaveform(media.waveform ?? row.payload?.media?.waveform));
     const content: TdObject = {
       '@type': 'inputMessageVoiceNote',
-      voice_note: {
-        '@type': 'voiceNote',
-        duration: Math.max(1, Math.round(durationMs / 1000)),
-        waveform,
-        mime_type: mime,
-      },
+      voice_note: { '@type': 'inputFileLocal', path: media.localPath },
+      duration: Math.max(1, Math.round(durationMs / 1000)),
+      waveform,
       caption: caption.length > 0 ? formatted(caption) : { '@type': 'formattedText', text: '', entities: [] },
     };
     return { sends: [send(content, true)], degraded: false };
@@ -217,8 +238,8 @@ export function planOutbound(
       '@type': 'inputMessagePhoto',
       photo: { '@type': 'inputFileLocal', path: media.localPath },
       caption: caption.length > 0 ? formatted(caption) : { '@type': 'formattedText', text: '', entities: [] },
-      sticker_width: media.width ?? Number(row.payload?.media?.width ?? 0),
-      sticker_height: media.height ?? Number(row.payload?.media?.height ?? 0),
+      width: media.width ?? Number(row.payload?.media?.width ?? 0),
+      height: media.height ?? Number(row.payload?.media?.height ?? 0),
     };
     return { sends: [send(content, true)], degraded: false };
   }
@@ -272,6 +293,7 @@ export function planOutbound(
           link_preview_options: { '@type': 'linkPreviewOptions', is_disabled: false },
         },
         index === chunks.length - 1,
+        index === 0,
       ),
     ),
     degraded: false,
@@ -558,22 +580,22 @@ export function decodeWaveform(encoded: unknown): number[] | undefined {
  * `messageSendingStateFailed` state, or `updateMessageSendAcknowledged`) is
  * attributed to the right outbox row.
  */
-export const sendOptions = (outboxId: number, highPriority = false): TdObject => ({
-  '@type': 'messageSendingOptions',
+export const sendOptions = (outboxId: number): TdObject => ({
+  // Verified against TDLib 1.8.43's td_api.tl: the type is messageSendOptions,
+  // not messageSendingOptions; it has no priority/allow_sending_without_reply.
+  '@type': 'messageSendOptions',
   sending_id: sendingIdFor(outboxId),
   disable_notification: false,
   from_background: true,
-  allow_sending_without_reply: true,
-  priority: highPriority ? 'HIGH' : 'DEFAULT',
 });
 
 /**
  * `bridge_claim_outbox` stamps `messages.tg_send_id` with the outbox id, so the
  * outbox id *is* the correlation token in both directions and no mapping table
- * is needed. TDLib wants an int53; outbox ids are small bigint sequence values.
+ * is needed. TDLib's sending_id is int32 (not a Telegram chat id's int53).
  */
 export function sendingIdFor(outboxId: number): number {
-  if (!Number.isSafeInteger(outboxId) || outboxId <= 0) {
+  if (!Number.isSafeInteger(outboxId) || outboxId <= 0 || outboxId > 0x7fff_ffff) {
     throw new Error(`outbox id ${outboxId} cannot be used as a TDLib sending_id`);
   }
   return outboxId;

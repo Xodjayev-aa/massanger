@@ -1,0 +1,2 @@
+# The Gradle batch wrapper must remain CRLF on Windows; the Git blob is LF.
+gradlew.bat text eol=crlf

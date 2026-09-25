@@ -38,18 +38,40 @@ void main() {
       expect(configured.realtimeUrl.toString(), 'wss://abcdef12345.supabase.co/realtime/v1/websocket');
     });
 
+    test('web OAuth redirects preserve the static host base path', () {
+      const githubPages = AppEnv(
+        supabaseUrl: 'https://abcdef12345.supabase.co',
+        supabaseAnonKey: 'public-key',
+        webRedirectUrl: 'https://xodjayev-aa.github.io/massanger/',
+      );
+      expect(githubPages.webRedirectUrl, 'https://xodjayev-aa.github.io/massanger/');
+      githubPages.validate();
+      const invalid = AppEnv(
+        supabaseUrl: 'https://abcdef12345.supabase.co',
+        supabaseAnonKey: 'public-key',
+        webRedirectUrl: 'http://untrusted.test/with?query=secret',
+      );
+      expect(invalid.validate, throwsStateError);
+    });
+
+    test('Telegram OIDC remains off until a hosted callback has been verified', () {
+      expect(configured.telegramOidcEnabled, false);
+      const verifiedHost = AppEnv(
+        supabaseUrl: 'https://abcdef12345.supabase.co',
+        supabaseAnonKey: 'public-key',
+        telegramOidcEnabled: true,
+      );
+      expect(verifiedHost.telegramOidcEnabled, true);
+    });
+
     test('functions can be served from another origin without touching the API URL', () {
       const split = AppEnv(
         supabaseUrl: 'https://abcdef12345.supabase.co',
         supabaseAnonKey: 'x',
         functionBaseUrl: 'https://functions.internal.test',
       );
-      expect(split.functionsPath('account-age-gate').toString(), 'https://functions.internal.test/functions/v1/account-age-gate');
+      expect(split.functionsPath('telegram-send').toString(), 'https://functions.internal.test/functions/v1/telegram-send');
       expect(configured.functionsPath('telegram-link').toString(), 'https://abcdef12345.supabase.co/functions/v1/telegram-link');
-    });
-
-    test('the age shown in the gate copy defaults to the server default', () {
-      expect(configured.minAccountAgeDays, 366);
     });
   });
 }

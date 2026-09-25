@@ -9,8 +9,9 @@ class AppEnv {
     required this.supabaseUrl,
     required this.supabaseAnonKey,
     this.functionBaseUrl,
-    this.minAccountAgeDays = 366,
     this.enableRealtime = true,
+    this.telegramOidcEnabled = false,
+    this.webRedirectUrl,
   });
 
   final String supabaseUrl;
@@ -20,12 +21,16 @@ class AppEnv {
   /// (a dedicated edge runtime or a CDN in front of `/functions/v1`).
   final String? functionBaseUrl;
 
-  /// Mirrors the server's MIN_ACCOUNT_AGE_DAYS. Purely for copy: the gate itself
-  /// is authoritative, and a mismatch only makes the message less precise.
-  final int minAccountAgeDays;
-
   /// Killed for debugging push storms; the app then polls on focus instead.
   final bool enableRealtime;
+
+  /// Only set after the hosted Supabase custom:telegram OIDC provider is enabled
+  /// and a real Telegram login has passed the hosted callback round trip.
+  final bool telegramOidcEnabled;
+
+  /// Public web app URL including its base path (e.g. GitHub Pages /massanger/).
+  /// Auth redirects must point here, not just to the site's origin.
+  final String? webRedirectUrl;
 
   static const String _undef = 'SUPABASE_URL_NOT_SET';
 
@@ -37,8 +42,9 @@ class AppEnv {
     supabaseUrl: String.fromEnvironment('SUPABASE_URL', defaultValue: _undef),
     supabaseAnonKey: String.fromEnvironment('SUPABASE_ANON_KEY'),
     functionBaseUrl: String.fromEnvironment('FUNCTION_BASE_URL'),
-    minAccountAgeDays: int.fromEnvironment('MIN_ACCOUNT_AGE_DAYS', defaultValue: 366),
     enableRealtime: bool.fromEnvironment('DISABLE_REALTIME') == false,
+    telegramOidcEnabled: bool.fromEnvironment('TELEGRAM_OIDC_ENABLED'),
+    webRedirectUrl: String.fromEnvironment('WEB_REDIRECT_URL'),
   );
 
   String get functionsBase {
@@ -61,6 +67,15 @@ class AppEnv {
     }
     if (supabaseAnonKey.isEmpty || supabaseAnonKey == _undef) {
       throw StateError('SUPABASE_ANON_KEY is not set. Pass it with --dart-define=SUPABASE_ANON_KEY=...');
+    }
+    final redirect = webRedirectUrl;
+    if (redirect != null && redirect.isNotEmpty) {
+      final uri = Uri.tryParse(redirect);
+      if (uri == null || !uri.hasAuthority || uri.userInfo.isNotEmpty ||
+          (uri.scheme != 'https' && !(uri.scheme == 'http' && (uri.host == 'localhost' || uri.host == '127.0.0.1'))) ||
+          uri.hasQuery || uri.hasFragment) {
+        throw StateError('WEB_REDIRECT_URL must be an absolute HTTPS app URL (or localhost for development).');
+      }
     }
   }
 

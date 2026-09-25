@@ -143,7 +143,7 @@ async function wake(request: IncomingMessage, response: ServerResponse, ctx: Rou
   const userIds = Array.isArray(payload.user_ids)
     ? payload.user_ids.filter((value): value is string => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value))
     : [];
-  const kind = payload.kind === 'outbox' || payload.kind === 'link' || payload.kind === 'relink' || payload.kind === 'media' ? payload.kind : undefined;
+  const kind = payload.kind === 'outbox' || payload.kind === 'notify' || payload.kind === 'link' || payload.kind === 'relink' || payload.kind === 'media' || payload.kind === 'chat' ? payload.kind : undefined;
 
   // Answer first: the edge function waits at most 2.5 s and must never have a
   // user-visible request fail because of us.
@@ -171,7 +171,7 @@ async function wake(request: IncomingMessage, response: ServerResponse, ctx: Rou
 function authorize(request: IncomingMessage, body: string, config: BridgeConfig): boolean {
   if (!config.bridgeToken && !config.bridgeHmacSecret) {
     // Explicitly insecure, and only reachable when MESSENGERX_ENV=development.
-    return config.messengerxEnv !== 'production';
+    return config.messengerxEnv === 'development';
   }
 
   const bearer = (singleHeader(request.headers.authorization) ?? '').replace(/^Bearer\s+/i, '');

@@ -557,7 +557,7 @@ final class DirectoryEntry {
       );
 }
 
-/// Own profile, including the gated access state the age check writes.
+/// Own profile, including the server-managed access state.
 final class AccountProfile {
   const AccountProfile({
     required this.id,
@@ -570,11 +570,6 @@ final class AccountProfile {
     this.phoneE164,
     this.telegramUsername,
     this.googleEmail,
-    this.googleAccountCreatedAt,
-    this.googleAccountAgeDays,
-    this.eligibilityVerifiedAt,
-    this.eligibilityMethod,
-    this.eligibilityAttempts = 0,
     this.accessStateReason,
     this.lastSeenAt,
   });
@@ -589,11 +584,6 @@ final class AccountProfile {
   final String? phoneE164;
   final String? telegramUsername;
   final String? googleEmail;
-  final DateTime? googleAccountCreatedAt;
-  final int? googleAccountAgeDays;
-  final DateTime? eligibilityVerifiedAt;
-  final String? eligibilityMethod;
-  final int eligibilityAttempts;
   final String? accessStateReason;
   final DateTime? lastSeenAt;
 
@@ -614,11 +604,6 @@ final class AccountProfile {
         phoneE164: map['phone_e164'] as String?,
         telegramUsername: map['telegram_username'] as String?,
         googleEmail: map['google_email'] as String?,
-        googleAccountCreatedAt: parseTimestamp(map['google_account_created_at']),
-        googleAccountAgeDays: map['google_account_age_days'] == null ? null : asInt(map['google_account_age_days']),
-        eligibilityVerifiedAt: parseTimestamp(map['eligibility_verified_at']),
-        eligibilityMethod: map['eligibility_method'] as String?,
-        eligibilityAttempts: asInt(map['eligibility_attempts']),
         accessStateReason: map['access_state_reason'] as String?,
         lastSeenAt: parseTimestamp(map['last_seen_at']),
       );
@@ -774,7 +759,7 @@ final class MirroredChat {
   String get directionLabel => switch (direction) {
         'off' => 'Off',
         'to_telegram' => 'App → Telegram',
-        'to_app' => 'Telegram → app',
+        'from_telegram' => 'Telegram → app',
         _ => 'Two-way',
       };
 

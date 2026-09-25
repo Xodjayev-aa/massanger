@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:image_picker/image_picker.dart';
 
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -69,7 +69,7 @@ class ProfileCubit extends Cubit<ProfileState> {
 
   /// Upload then point at it — never the reverse, so a failed upload cannot leave a
   /// profile referencing an object that does not exist.
-  Future<void> saveAvatar(File file, {String? previousPath}) async {
+  Future<void> saveAvatar(XFile file, {String? previousPath}) async {
     emit(state.copyWith(saving: true, error: null));
     try {
       final path = await _accounts.uploadAvatar(file);
