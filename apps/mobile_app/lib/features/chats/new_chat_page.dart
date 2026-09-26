@@ -87,7 +87,7 @@ class _NewChatPageState extends State<NewChatPage> {
       return;
     }
     try {
-      final results = await context.read<ChatRepository>().searchPeople(value);
+      final results = await sl<ChatRepository>().searchPeople(value);
       if (!mounted || _controller.text.trim() != value.trim()) return;
       setState(() {
         _results = results;
@@ -105,7 +105,7 @@ class _NewChatPageState extends State<NewChatPage> {
       _error = null;
     });
     try {
-      final chatId = await context.read<ChatRepository>().createDirectChat(peerId: entry.id);
+      final chatId = await sl<ChatRepository>().createDirectChat(peerId: entry.id);
       if (!mounted) return;
       // The list has to know before we navigate, or the new chat appears only after
       // the user comes back.
