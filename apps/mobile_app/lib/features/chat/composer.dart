@@ -42,6 +42,7 @@ class ComposerState extends State<Composer> {
   void initState() {
     super.initState();
     _focus.addListener(_onFocusChange);
+    _text.addListener(_onTextListener);
   }
 
   @override
@@ -49,6 +50,7 @@ class ComposerState extends State<Composer> {
     _typingStop?.cancel();
     _recordTicker?.cancel();
     _focus.removeListener(_onFocusChange);
+    _text.removeListener(_onTextListener);
     _focus.dispose();
     _text.dispose();
     unawaited(_voices.cancel());
@@ -57,6 +59,13 @@ class ComposerState extends State<Composer> {
 
   void _onFocusChange() {
     if (!_focus.hasFocus) widget.bloc.notifyTyping(on: false);
+  }
+
+  void _onTextListener() {
+    // Rebuild so the mic ↔ send button swap happens immediately when the
+    // user types or clears the field. The typing notifier itself is handled
+    // in _onTextChanged to avoid double timers.
+    if (mounted) setState(() {});
   }
 
   bool get _canSend => _text.text.trim().isNotEmpty && !widget.bloc.state.sending;
@@ -76,12 +85,20 @@ class ComposerState extends State<Composer> {
   }
 
   void _send() {
+    if (!_canSend) {
+      final text = _text.text.trim();
+      if (text.isEmpty) return;
+    }
     final text = _text.text.trim();
     if (text.isEmpty) return;
     _text.clear();
     _typingStop?.cancel();
+    _typingStop = null;
     widget.bloc.notifyTyping(on: false);
     widget.bloc.add(ChatTextSent(text));
+    // Keep focus in the composer after send so Enter can be pressed again
+    // without an extra tap, especially on web/desktop.
+    _focus.requestFocus();
   }
 
   Future<void> _pickImage() async {
@@ -250,6 +267,7 @@ class ComposerState extends State<Composer> {
             minLines: 1,
             maxLines: 6,
             textCapitalization: TextCapitalization.sentences,
+            textInputAction: TextInputAction.send,
             onChanged: _onTextChanged,
             onSubmitted: (_) => _send(),
             decoration: InputDecoration(
@@ -260,11 +278,12 @@ class ComposerState extends State<Composer> {
         ),
         const SizedBox(width: 4),
         BlocBuilder<ChatBloc, ChatState>(
-          buildWhen: (previous, next) => previous.sending != next.sending || previous.messages.length != next.messages.length,
+          buildWhen: (previous, next) => previous.sending != next.sending,
           builder: (context, state) {
             final hasText = _text.text.trim().isNotEmpty;
             if (hasText) {
               return IconButton.filled(
+                tooltip: 'Send message (Enter)',
                 // `_canSend` is the one rule: nothing typed, or a send already in
                 // flight for this thread.
                 onPressed: _canSend ? _send : null,
