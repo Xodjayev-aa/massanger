@@ -31,7 +31,7 @@ const productionEnv = {
   SUPABASE_ANON_KEY: anonKey,
   VERCEL: '1',
   VERCEL_ENV: 'production',
-  VERCEL_PROJECT_PRODUCTION_URL: 'messengerx-uz.vercel.app',
+  VERCEL_PROJECT_PRODUCTION_URL: 'officialmessengerx.vercel.app',
 };
 
 describe('public web build config', () => {

@@ -14,7 +14,7 @@ checks below pass. Budget is **$0**, without Oracle or an always-on personal PC.
 | A Telegram BotFather login client/secret | Optional standalone Telegram **OIDC approval** sign-in | Configure only in Supabase Auth as `custom:telegram`; does not create a TDLib user session. See [telegram-sign-in.md](telegram-sign-in.md). |
 | A Telegram **API ID/hash** from `my.telegram.org` | Personal-account TDLib linking via phone, code, optional 2FA | API hash belongs only on the worker, never in the web/mobile app. |
 | A durable Linux host running native TDLib and Node | Sync Telegram chats and deliver A+C offline notices through Saved Messages | **No verified $0 host has been provisioned** that guarantees always-on execution *and* encrypted, persistent private TDLib files. A serverless web host or free sleeping instance does not substitute for this. |
-| Vercel Hobby project named `messengerx-uz` | Free HTTPS website at `https://messengerx-uz.vercel.app` (site root `/`) | Not created from this workspace. On 25 September 2026 that hostname returned `DEPLOYMENT_NOT_FOUND`. GitHub Pages `/massanger/` is retired (404). Vercel is not a worker. If the project name is taken, stop and ask before picking another. See [vercel.md](vercel.md). |
+| Vercel Hobby project named `officialmessengerx` | Free HTTPS website at `https://officialmessengerx.vercel.app` (site root `/`) | Not created from this workspace. On 25 September 2026 that hostname returned `DEPLOYMENT_NOT_FOUND`. GitHub Pages `/massanger/` is retired (404). Vercel is not a worker. If the project name is taken, stop and ask before picking another. See [vercel.md](vercel.md). |
 
 **Unfulfilled product requirement:** the direct in-app Telegram **phone/code
 identity sign-in** (without first using Google or Telegram OIDC) is *not*
@@ -59,10 +59,10 @@ keys or seed data to production.
    `supabase/seed.sql` into live users' data. Check every migration result and
    inspect RLS, grants, Storage buckets and Realtime publication in Dashboard.
 2. Auth → URL Configuration: set the site URL to
-   `https://messengerx-uz.vercel.app`. Allow
-   `https://messengerx-uz.vercel.app`,
-   `https://messengerx-uz.vercel.app/` and
-   `https://messengerx-uz.vercel.app/**`. Remove the retired GitHub Pages
+   `https://officialmessengerx.vercel.app`. Allow
+   `https://officialmessengerx.vercel.app`,
+   `https://officialmessengerx.vercel.app/` and
+   `https://officialmessengerx.vercel.app/**`. Remove the retired GitHub Pages
    redirect if it is still listed. Allow the native
    `com.messengerx.app://login-callback` **only after** native schemes are
    installed and tested — there is no signed public Android installer yet.
@@ -71,7 +71,7 @@ keys or seed data to production.
    `https://<ref>.supabase.co/auth/v1/callback` with Google. That Google
    redirect URI does **not** change to the Vercel address. Google's
    Authorized JavaScript origin **does** change to
-   `https://messengerx-uz.vercel.app` (no path). Click-by-click steps are in
+   `https://officialmessengerx.vercel.app` (no path). Click-by-click steps are in
    [vercel.md](vercel.md). Configure an external consent screen if Google
    requires one. Gmail/Drive access is not requested. Telegram OIDC
    configuration is in [telegram-sign-in.md](telegram-sign-in.md); leave
@@ -79,7 +79,7 @@ keys or seed data to production.
 3. Hosted Edge Functions are set to `MESSENGERX_ENV=production`. Configure
    **private** Function secrets `SEAL_KEY` (32 random bytes/64 hex digits),
    `BRIDGE_TOKEN` and `BRIDGE_HMAC_SECRET` (different random values, at least
-   32 characters each), plus `ALLOWED_ORIGINS=https://messengerx-uz.vercel.app` (an **origin**, with no
+   32 characters each), plus `ALLOWED_ORIGINS=https://officialmessengerx.vercel.app` (an **origin**, with no
    path and no trailing slash). Supabase provides `SUPABASE_URL`,
    `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` in its hosted runtime;
    never put the service-role key in GitHub repository variables, Vercel, or Flutter.
@@ -111,7 +111,7 @@ keys or seed data to production.
 The public site is a **Vercel Hobby** static deploy at the domain root, not
 GitHub Pages. `https://xodjayev-aa.github.io/massanger/` returns 404 and the
 Pages workflow has been removed so it cannot publish `/massanger/` again.
-Follow [vercel.md](vercel.md) exactly: project name `messengerx-uz`, root
+Follow [vercel.md](vercel.md) exactly: project name `officialmessengerx`, root
 directory `apps/mobile_app` (or the repository root — both `vercel.json` files
 call the same script), install/build commands from that file, and only
 `SUPABASE_URL` plus the public anon/publishable key as environment variables.
@@ -121,7 +121,7 @@ secrets if they are present in the build environment.
 
 This repository does **not** create the Vercel project. A merge to `main` does
 not deploy until the Vercel project is connected, and it does not apply
-Supabase migrations. Do not claim `https://messengerx-uz.vercel.app` is live
+Supabase migrations. Do not claim `https://officialmessengerx.vercel.app` is live
 until that hostname serves the MessengerX sign-in page rather than
 `DEPLOYMENT_NOT_FOUND`. If Vercel will not accept the project name, stop and
 ask before choosing another.

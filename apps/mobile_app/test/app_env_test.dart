@@ -42,9 +42,9 @@ void main() {
       const vercel = AppEnv(
         supabaseUrl: 'https://abcdef12345.supabase.co',
         supabaseAnonKey: 'public-key',
-        webRedirectUrl: 'https://messengerx-uz.vercel.app/',
+        webRedirectUrl: 'https://officialmessengerx.vercel.app/',
       );
-      expect(vercel.webRedirectUrl, 'https://messengerx-uz.vercel.app/');
+      expect(vercel.webRedirectUrl, 'https://officialmessengerx.vercel.app/');
       vercel.validate();
       const invalid = AppEnv(
         supabaseUrl: 'https://abcdef12345.supabase.co',

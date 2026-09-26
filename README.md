@@ -10,7 +10,7 @@ publicly deployed service**.
 | Capability | Honest status |
 | --- | --- |
 | Direct/group MessengerX chats, media, typing, receipts | Implemented; server policies and bridge flows have automated tests. |
-| Web client / PWA | Flutter web release compiles in CI at site root `/`. Intended Vercel Hobby URL is `https://messengerx-uz.vercel.app` — **not serving a deployment** (`DEPLOYMENT_NOT_FOUND` on 25 September 2026). GitHub Pages `/massanger/` is retired (404). |
+| Web client / PWA | Flutter web release compiles in CI at site root `/`. Intended Vercel Hobby URL is `https://officialmessengerx.vercel.app` — **not serving a deployment** (`DEPLOYMENT_NOT_FOUND` on 25 September 2026). GitHub Pages `/massanger/` is retired (404). |
 | Google sign-in | Client flow exists; requires hosted Google OAuth and Supabase configuration. No account-age check: Google does not prove account age. |
 | Standalone Telegram identity | Gated `custom:telegram` OIDC option (Telegram-app approval). Needs a real BotFather client, hosted provider and live verification before enabling. **Not the requested in-app phone/code identity sign-in.** |
 | TDLib phone/code/2FA connection | Exists **after** MessengerX sign-in. Requires a durable worker, a real Telegram API ID/hash and encrypted persistent session storage. |
@@ -20,7 +20,7 @@ publicly deployed service**.
 | Hosted database, public site, native worker | **Not provisioned.** SQL/RLS tests are not proof of live security, backup or uptime. |
 
 **$0 constraints:** Vercel Hobby can host the static website at
-`https://messengerx-uz.vercel.app` (see [docs/vercel.md](docs/vercel.md)), and
+`https://officialmessengerx.vercel.app` (see [docs/vercel.md](docs/vercel.md)), and
 Supabase Free can host the database within quotas. The Free database can pause
 when unused. Browser notifications (`00017`) are the one alert path with no
 always-on requirement at all: they need the hosted database, a deployed

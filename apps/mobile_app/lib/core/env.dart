@@ -29,7 +29,7 @@ class AppEnv {
   final bool telegramOidcEnabled;
 
   /// Public web app URL. The Vercel site is hosted at the domain root
-  /// (https://messengerx-uz.vercel.app/), not under a /massanger/ prefix.
+  /// (https://officialmessengerx.vercel.app/), not under a /massanger/ prefix.
   /// Auth redirects must match a Supabase redirect allowlist entry.
   final String? webRedirectUrl;
 
