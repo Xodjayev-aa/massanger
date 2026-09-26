@@ -15,19 +15,23 @@ publicly deployed service**.
 | Standalone Telegram identity | Gated `custom:telegram` OIDC option (Telegram-app approval). Needs a real BotFather client, hosted provider and live verification before enabling. **Not the requested in-app phone/code identity sign-in.** |
 | TDLib phone/code/2FA connection | Exists **after** MessengerX sign-in. Requires a durable worker, a real Telegram API ID/hash and encrypted persistent session storage. |
 | Chat with Telegram users | Existing mirrors open in-app; starting a **new** private conversation by an exact public `@username` has an owner-scoped worker queue and simulated tests. No phone-number search/contact import and no real Telegram integration test yet. |
-| Notifications | A + C: user's own Telegram Saved Messages for offline folded alerts (mute/read/duplicate suppression), plus local banners while the app is open. No FCM/APNs or promised notice tap-through. |
+| Notifications | Three paths, none of them FCM/APNs: **browser push** (`00017`, needs no worker — the browser's push service delivers, a service worker draws the notification, and any open app drains the queue) with tap-through into the chat; the user's own Telegram Saved Messages for offline folded alerts (mute/read/duplicate suppression), which needs the TDLib worker; and local banners while the app is open. Browser push needs VAPID secrets set (§5b of the runbook) and a real device test before it is claimed as working. |
 | Android/iOS binaries | Native project sources, OAuth callbacks, permissions and icons are tracked; CI checks a placeholder-config Android debug build. No signed release or device test. iOS PWA is the $0 install path. |
 | Hosted database, public site, native worker | **Not provisioned.** SQL/RLS tests are not proof of live security, backup or uptime. |
 
 **$0 constraints:** Vercel Hobby can host the static website at
 `https://messengerx-uz.vercel.app` (see [docs/vercel.md](docs/vercel.md)), and
 Supabase Free can host the database within quotas. The Free database can pause
-when unused. The old GitHub Pages URL returns 404 and is not the deployment
+when unused. Browser notifications (`00017`) are the one alert path with no
+always-on requirement at all: they need the hosted database, a deployed
+`web-push` function and a VAPID key pair, and nothing else. The old GitHub Pages URL returns 404 and is not the deployment
 path. Vercel is website hosting only. Neither Vercel, short-lived functions nor
 a sleeping free instance is a durable TDLib user-session worker. We do not have
 a verified $0 always-on host with persistent private session storage. Chatting
 with real Telegram users and offline Saved Messages notices must not be
 advertised as live until that worker has been securely provisioned and tested.
+Browser notifications do not wait on that worker, but they are not proven either
+until the device test in the runbook passes.
 No Oracle signup or always-on personal computer is assumed. There is no signed
 public Android installer. The $0 iPhone option is the PWA (Add to Home Screen),
 not an App Store app. Standalone in-app phone/code identity sign-in is not
@@ -37,8 +41,9 @@ implemented.
 
 ```text
 apps/mobile_app/            Flutter UI, web PWA and reviewed Android/iOS platform source
+apps/mobile_app/web/push/   Web Push client + service worker (the $0 no-worker alerts)
 supabase/migrations/        SQL schema, RLS, RPCs, storage policies and queues
-supabase/functions/         Deno edge functions: link, send, ingest, legacy access status
+supabase/functions/         Deno edge functions: link, send, ingest, push, legacy access status
 services/telegram_bridge/  TDLib worker, simulated transport and tests
 infra/                     Optional worker process/container examples (not a host)
 tools/sql-test/             PGlite migration, security and queue contract tests

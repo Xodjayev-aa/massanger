@@ -7,6 +7,7 @@ import '../../app/router.dart';
 import '../../core/errors.dart';
 import '../../core/formatting.dart';
 import '../../data/models.dart';
+import '../../data/push_repository.dart';
 import '../../data/telegram_repository.dart';
 import '../chats/widgets.dart';
 import 'telegram_cubit.dart';
@@ -20,7 +21,7 @@ class TelegramPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider<TelegramCubit>(
-      create: (context) => TelegramCubit(sl<TelegramRepository>())..load(),
+      create: (context) => TelegramCubit(sl<TelegramRepository>(), sl<PushRepository>())..load(),
       child: const _TelegramView(),
     );
   }
@@ -77,10 +78,33 @@ class _TelegramView extends StatelessWidget {
                         ? (value) => context.read<TelegramCubit>().setPushPreferences(preview: value)
                         : null,
                   ),
+                  // The one delivery path that needs no worker of ours running:
+                  // the browser's own push service holds the connection and the
+                  // service worker draws the notification. Hidden entirely on
+                  // Android/iOS and on browsers that cannot do it, rather than
+                  // offering a switch that cannot work.
+                  if (state.browserPush != null && !state.browserPush!.unavailable)
+                    _PreferenceRow(
+                      title: 'Browser notifications',
+                      subtitle: _browserPushSubtitle(state.browserPush!),
+                      value: state.browserPush!.enabled,
+                      onChanged: state.busy ? null : (value) => context.read<TelegramCubit>().setBrowserPush(value),
+                    ),
+                  if (state.browserPush != null && state.browserPush!.thisBrowserRegistered)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          onPressed: state.busy ? null : () => context.read<TelegramCubit>().forgetBrowser(),
+                          child: const Text('Remove this browser'),
+                        ),
+                      ),
+                    ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
                     child: Text(
-                      'No APNs or FCM: Telegram handles offline delivery. No alert is sent for a muted or read chat, or for a message your Telegram already received.',
+                      'No APNs or FCM: browser notifications come from this site through your browser\'s own push service, and Telegram handles the rest. No alert is sent for a muted or read chat, or for a message your Telegram already received.',
                       style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
                   ),
@@ -334,4 +358,26 @@ class _MirrorRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// One line, in the user's words, about why the browser switch looks the way it
+/// does. Every state here has a different fix, so none of them may share a
+/// generic "not available" string.
+String _browserPushSubtitle(BrowserPushState push) {
+  if (push.blocked) {
+    return 'Notifications are blocked for this site. Allow them in your browser settings, then turn this on.';
+  }
+  if (!push.bridge.supported) {
+    return 'This browser cannot show notifications. On an iPhone, add MessengerX to the Home Screen first.';
+  }
+  if (!push.enabled) {
+    return 'Get a notification on this device when a message arrives and the app is closed.';
+  }
+  if (!push.thisBrowserRegistered) {
+    return 'On for ${push.devices.length} browser${push.devices.length == 1 ? '' : 's'}, but not this one. Turn it off and on to add this browser.';
+  }
+  return push.devices.length <= 1
+      ? 'On for this browser.'
+      : 'On for this browser and ${push.devices.length - 1} other'
+          '${push.devices.length == 2 ? '' : 's'}.';
 }

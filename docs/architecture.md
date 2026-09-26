@@ -8,8 +8,9 @@ something. The operational side (provisioning, incidents) is in
 
 ```
 apps/mobile_app          Flutter, flutter_bloc + go_router + get_it
+apps/mobile_app/web/push  the browser half of Web Push: client + service worker
 supabase/migrations      the whole data model, RLS, RPCs, triggers, storage, realtime
-supabase/functions       Deno: read-only legacy access state, link, send, ingest
+supabase/functions       Deno: read-only legacy access state, link, send, ingest, push
 services/telegram_bridge long-lived Node worker: TDLib sessions, outbox, Saved Messages notices, ingest
 docs/ infra/ Makefile    runbook, compose wiring, task entry points
 tools/                   typecheck configs + the PGlite suites
@@ -92,6 +93,64 @@ cover anything missed. A banner tap dismisses; no notice deep link is wired.
 Telegram itself may suppress an OS notification for a self-sent Saved Messages
 entry: this architecture delivers *content* to Telegram, **not** an assured iOS
 or Android system push. See [the device smoke test](runbook.md#5-personal-tdlib-bridge-and-a--c-notifications).
+Browser notifications — the next section — are the path that does not need that
+worker, and they are the only notice with a working tap-through.
+
+## Browser push (migration 00017)
+
+The Saved Messages path above has one structural dependency: a worker of ours must
+be awake. `00017` adds a second offline-notice path that has none. The browser's
+own push service holds the socket to the device, our service worker draws the
+notification, and Postgres queues the work — no FCM project, no OneSignal
+account, no Apple program. VAPID (RFC 8292) is the signature and RFC 8291's
+`aes128gcm` is the encryption, implemented in `supabase/functions/_shared/webpush.ts`
+on WebCrypto alone so the same code runs in Deno and in the Node test suite.
+
+**Shape.** `push_subscriptions` holds one row per browser install — endpoint plus
+the `p256dh`/`auth` keys the browser generated, which are only ever used to
+encrypt a payload that the browser is the sole reader of. `web_push_requests`
+is deliberately a *separate* queue from `notify_requests`, not a channel column
+on it: a Saved Messages notice needs a linked, live TDLib session, a browser push
+needs nothing but a subscription, and neither switch may silently gate the other.
+The two queues share `outbox_state` and, more importantly, share 00012's privacy
+*functions* — `app.notify_already_buzzed` and `app.notify_body_preview` — so
+"your own Telegram already delivered this" and "previews are off" cannot drift
+apart between transports.
+
+**One difference is deliberate.** `app.queue_web_push` does **not** call
+`notify_waiting_for_telegram`. That check makes the Telegram notice wait for an
+in-flight outbox row precisely so Telegram does not double-buzz a chat it is
+about to deliver; here the entire point is to stop depending on Telegram.
+The *already delivered* check still applies, so a chat Telegram really did
+deliver is not announced twice.
+
+**Delivery.** `web_push_claim` leases due rows with `FOR UPDATE SKIP LOCKED`,
+runs `bridge_claim_notify`'s three maintenance passes first (retire rows nobody
+is owed, fail exhausted ones, recover leases whose holder died — the lease *is*
+`next_attempt_at`), and re-checks `web_push_owed` immediately before encrypting.
+A sweep is idempotent, so losing one costs latency: the `web-push` function does
+one now, a database webhook can do one on insert, and **any open app drains the
+queue on its presence heartbeat** (`PushRepository.sweep`), which is what makes
+the feature work with no scheduler configured at all.
+
+**Failure is per subscription, not per notice.** A push service answering
+404/410 is saying the subscription is permanently gone, so
+`web_push_target_result` deletes it; twenty consecutive failures disable one
+instead of hammering a broken endpoint; a success clears the record. A browser
+that registers again revives its row, and because endpoints are unique, signing
+into a different account in the same browser *moves* the row rather than
+notifying the previous account.
+
+**Where the client sits.** All of the Web Push surface lives in
+`apps/mobile_app/web/push/` — `push-client.js` (subscribe, permission, VAPID key
+fetch) and `sw.js` (the notification and its tap). It is registered with a
+`/push/` scope because Flutter already owns `/` for offline caching, and two
+service workers cannot control one scope. Nothing in that folder talks to
+Supabase: it returns the keys the browser produced, and Dart stores them through
+`register_push_subscription`, so RLS stays the authority. The Dart bridge is a
+conditional import (`push_bridge_stub.dart` / `push_bridge_web.dart`), and the
+whole boundary crossing is JSON strings — a push boundary that cannot be
+exercised by the test suite should be as small and as boring as possible.
 
 ## Delivery states
 
@@ -179,9 +238,9 @@ is the only global.
 
 | Suite | Runs | Covers |
 | --- | --- | --- |
-| `npm run test:sql` | PGlite, no Docker | 86+ assertions: RLS, RPCs, Telegram lookup and notice queues, media, privacy, retries |
+| `npm run test:sql` | PGlite, no Docker | 95 assertions: RLS, RPCs, Telegram lookup and notice queues, browser-push queue and device cap, media, privacy, retries |
 | `npm run test:seed` | PGlite | seed applies and the fixtures stay consistent |
-| `npm run test:functions` | Node with a Deno env stub | production CORS/sealing and trust settings fail closed |
+| `npm run test:functions` | Node with a Deno env stub | production CORS/sealing and trust settings fail closed; Web Push reproduces the RFC 8291 §5 example byte for byte (and a spec-independent receiver decrypts it), endpoint/SSRF policy, VAPID ES256 verification |
 | `npm run test:bridge` | memory TDLib simulator | 110 assertions: auth, chats, notices, lookups, flood waits, media, ingest |
 | `npm run typecheck:functions` | `tsc` and Deno shims | edge functions typecheck; not a hosted runtime test |
 | Flutter CI | hosted Linux runner | analyzer, widget tests, placeholder-config release web build |

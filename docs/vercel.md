@@ -236,7 +236,7 @@ Ask before anyone else runs it. Never run `supabase db reset` or
 you set `MESSENGERX_CONFIRM_HOSTED_PUSH=yes` after reading this section.
 
 The hosted project previously had **no migrations applied**. Pushing applies
-`supabase/migrations/00001` through `00016` in order. It does not import
+`supabase/migrations/00001` through `00017` in order. It does not import
 `supabase/seed.sql`. Do not load seed data into the hosted project.
 
 1. Install the [Supabase CLI](https://supabase.com/docs/guides/cli) on your
@@ -313,6 +313,7 @@ The hosted project previously had **no migrations applied**. Pushing applies
    supabase functions deploy telegram-send
    supabase functions deploy telegram-ingest
    supabase functions deploy account-age-gate
+   supabase functions deploy web-push --no-verify-jwt
    ```
 
    Then in the dashboard confirm:
@@ -321,6 +322,12 @@ The hosted project previously had **no migrations applied**. Pushing applies
      JWT. The function still requires the private bridge bearer **and** HMAC.
      Never turn that application check off, and never put those credentials
      in the Flutter app.
+   - `web-push`: platform JWT **off** as well, because its scheduled caller (a
+     database webhook or `pg_cron`) has no session either. Both of its entry
+     points authenticate themselves: a Supabase session for a sender's tab, or
+     `WEB_PUSH_SWEEP_TOKEN` for the scheduled sweep. It is optional — with no
+     VAPID secrets it reports the feature as unconfigured and nothing else
+     changes. Setup is in [runbook §5b](runbook.md#5b-browser-notifications-0-no-worker).
 8. Set `MESSENGERX_ENV=production` if the hosted runtime does not already
    force it. The function code treats a missing value as production and
    refuses to boot without `SEAL_KEY`, `BRIDGE_TOKEN`, `BRIDGE_HMAC_SECRET`

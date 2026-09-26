@@ -108,6 +108,15 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+# Browser push (RFC 8291/8292). The scheduled caller — a database webhook or a
+# pg_cron job — has no user session and no JWT, so the platform check is off and
+# the function authenticates both entry points itself: a Supabase session for the
+# sender's tab, or WEB_PUSH_SWEEP_TOKEN for the scheduled sweep. A deployment
+# with no VAPID secrets reports the feature as unconfigured instead of failing.
+[functions.web-push]
+enabled = true
+verify_jwt = false
+
 [studio]
 enabled = true
 port = 54323

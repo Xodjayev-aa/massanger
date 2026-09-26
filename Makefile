@@ -141,7 +141,7 @@ deploy:
 	  exit 1; \
 	}
 	$(Q)supabase db push
-	$(Q)for f in account-age-gate telegram-ingest telegram-link telegram-send; do \
+	$(Q)for f in account-age-gate telegram-ingest telegram-link telegram-send web-push; do \
 	  supabase functions deploy "$$f" || exit 1; done
 
 # ── containers ────────────────────────────────────────────────────────────────
