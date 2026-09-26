@@ -15,3 +15,6 @@ Future<PushBridgeEnableResult> enableBrowserPush(String configUrl) async =>
 
 /// Nothing to unsubscribe: returns the endpoint that was removed, if any.
 Future<String?> disableBrowserPush() async => null;
+
+/// Native builds have no browser push queue to drain.
+Future<void> sweepBrowserPush(String configUrl, String accessToken) async {}

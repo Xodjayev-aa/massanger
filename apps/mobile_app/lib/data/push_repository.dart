@@ -91,7 +91,7 @@ class PushRepository {
   /// browser-push migration yet must lose a switch, not the whole screen.
   Future<BrowserPushState> load() async {
     final bridge = await browserPushStatus();
-    if (bridge.unsupported) {
+    if (!bridge.supported) {
       return BrowserPushState(
         bridge: bridge,
         enabled: false,
@@ -177,16 +177,14 @@ class PushRepository {
   /// for the operator to configure. A deployment that also wires the documented
   /// database webhook gets immediate delivery instead.
   Future<void> sweep() async {
-    try {
-      // `functions.invoke` builds the URL from the Supabase origin. A build that
-      // overrides FUNCTION_BASE_URL would need the URL posted by hand; nothing in
-      // the app does that today, and a missed sweep is harmless by design.
-      await _client.functions.invoke('web-push', body: const <String, Object?>{'limit': 5});
-    } catch (_) {
-      // Missing function, missing VAPID keys, rate limit, offline: none of these
-      // are things the person using the app can act on, and none of them mean a
-      // notification was lost.
-    }
+    // The POST carries the caller's own session, so the function rate-limits it
+    // per user and only ever leases rows the rules already allow. The request is
+    // made by the browser bridge rather than the Supabase SDK so that all HTTP
+    // in this feature lives in one place (`web/push/push-client.js`), which is
+    // the only part of it that cannot be exercised by the test suite.
+    final token = _client.auth.currentSession?.accessToken;
+    if (token == null || token.isEmpty) return;
+    await sweepBrowserPush(_pushConfigUrl, token);
   }
 
   /// Forget this browser entirely: revoke the subscription and drop its row.

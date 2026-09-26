@@ -35,6 +35,9 @@ external JSPromise<JSString> _enable(JSString configUrl);
 @JS('MessengerXPush.disable')
 external JSPromise<JSString> _disable();
 
+@JS('MessengerXPush.sweep')
+external JSPromise<JSString> _sweep(JSString configUrl, JSString accessToken);
+
 /// Reading a missing global as a nullable interop type yields null rather than
 /// throwing, which is exactly the guard we want for a cached `index.html` that
 /// predates `push-client.js`.
@@ -95,6 +98,18 @@ Future<PushBridgeEnableResult> enableBrowserPush(String configUrl) async {
     ));
   } catch (_) {
     return const PushBridgeEnableResult.refused(PushBridgeFailure.error);
+  }
+}
+
+/// Ask the server to drain the queue once. Fire and forget: the server decides
+/// what may be sent, so the answer here is not actionable and is not read.
+Future<void> sweepBrowserPush(String configUrl, String accessToken) async {
+  if (!_available) return;
+  if (configUrl.isEmpty || accessToken.isEmpty) return;
+  try {
+    await _sweep(configUrl.toJS, accessToken.toJS).toDart;
+  } catch (_) {
+    // Unreachable, refused, rate limited, or a deployment with no push keys.
   }
 }
 

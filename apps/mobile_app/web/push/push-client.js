@@ -221,10 +221,41 @@
       });
   }
 
+  /**
+   * Ask the server to drain the notification queue once.
+   *
+   * No server of ours polls for work, so whichever app is already awake keeps
+   * the queue moving. It rides the presence heartbeat, so this is best effort by
+   * design: `web_push_claim` decides what may be sent, and a sweep that is lost,
+   * refused or run twice costs at most a delay. `keepalive` lets it finish even
+   * if the tab is being closed, and every outcome is swallowed — nothing here is
+   * something the person using the app can act on.
+   */
+  function sweep(configUrl, accessToken) {
+    if (!configUrl || !accessToken) {
+      return Promise.resolve(JSON.stringify({ ok: false, reason: 'skipped' }));
+    }
+    return fetch(configUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer ' + accessToken,
+      },
+      body: JSON.stringify({ limit: 5 }),
+      keepalive: true,
+      cache: 'no-store',
+    }).then(function (response) {
+      return JSON.stringify({ ok: response.ok, status: response.status });
+    }).catch(function () {
+      return JSON.stringify({ ok: false, reason: 'unreachable' });
+    });
+  }
+
   window.MessengerXPush = {
     status: status,
     enable: enable,
     disable: disable,
+    sweep: sweep,
     /** Exposed for the app to match a stored row against this browser. */
     deviceLabel: deviceLabel,
   };
