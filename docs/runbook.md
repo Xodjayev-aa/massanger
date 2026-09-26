@@ -91,7 +91,7 @@ keys or seed data to production.
    asymmetric user JWTs: `requireUser` validates tokens with Supabase Auth's
    `getUser()` and rejects non-user roles.
 4. Run `supabase functions deploy telegram-link`, `telegram-send`,
-   `web-push --no-verify-jwt` (see §5b) and
+   `web-push-send --no-verify-jwt` (see §5b) and
    `telegram-ingest` (or `make deploy`, which also deploys the read-only legacy
    `account-age-gate` status route). In the hosted Functions settings verify
    `telegram-link`/`telegram-send` have **JWT verification on**;
@@ -203,7 +203,7 @@ the user has not allowed.
    verify, and rotating it invalidates every existing subscription:
 
    ```bash
-   npx --yes web-push generate-vapid-keys --json
+   npx --yes web-push-send generate-vapid-keys --json
    ```
 
 3. **Set the function secrets** (dashboard or CLI; never in a Git commit):
@@ -226,32 +226,84 @@ the user has not allowed.
    authenticates both paths itself:
 
    ```bash
-   supabase functions deploy web-push --no-verify-jwt
+   supabase functions deploy web-push-send --no-verify-jwt
    ```
 
    With no VAPID secrets it answers `configured: false` and the app hides the
    switch. Nothing else breaks.
 
-Optional, to make delivery immediate:
+Optional, to make delivery immediate (no laptop, no cron service, no dashboard
+webhook — the database does it):
 
-5. **Set `WEB_PUSH_SWEEP_TOKEN`** to 32+ random characters and add a database
-   webhook: Dashboard → **Database → Webhooks → Create a new hook**, table
-   `web_push_requests`, event **Insert**, type **HTTP Request**, method `POST`,
-   URL `https://<project-ref>.supabase.co/functions/v1/web-push`, header
-   `Authorization: Bearer <WEB_PUSH_SWEEP_TOKEN>`. The same token can drive a
-   `pg_cron` job instead.
+5. **Enable `pg_net`** — Dashboard → **Database → Extensions** → search `pg_net`
+   → enable. Migration `00018` creates the dispatch trigger on the next
+   migration run; if `pg_net` is absent the migration applies cleanly and
+   nothing dispatches, so this step is genuinely optional.
 
-   Without step 5 the feature still works: notices are queued in Postgres and
-   **any open app drains the queue on its presence heartbeat**, so the worst
-   case is a delay of about a minute rather than a lost notification. With it,
-   delivery is immediate.
+6. **Put the webhook target in Vault** — Dashboard → **Project Settings →
+   Vault** → *Add new secret*, twice. Vault is where these belong: the trigger
+   reads them at call time, so nothing is baked into the migration and rotating
+   the token needs no deploy.
+
+   | Name | Value |
+   | --- | --- |
+   | `messengerx_push_dispatch_url` | `https://<project-ref>.supabase.co/functions/v1/web-push-send` |
+   | `messengerx_push_dispatch_token` | the same value as `WEB_PUSH_SWEEP_TOKEN` |
+
+   Both are required: a URL without a token would only produce a guaranteed 401,
+   so an incomplete pair dispatches nothing rather than failing loudly on every
+   message.
+
+   **Do not** instead put these in the trigger or a migration — `pg_proc.prosrc`
+   is readable by more roles than a secret should be, and this repository keeps
+   each secret in exactly one place.
+
+   <details>
+   <summary>Alternative without Vault (self-hosted Postgres)</summary>
+
+   A database-local setting works anywhere and is how a local stack points at
+   itself. It is read second, so Vault wins when both exist:
+
+   ```sql
+   alter database postgres set messengerx.push_dispatch_url =
+     'http://host.docker.internal:54321/functions/v1/web-push-send';
+   alter database postgres set messengerx.push_dispatch_token = '<sweep token>';
+   ```
+   </details>
+
+   A **dashboard database webhook** (Database → Webhooks → `web_push_requests`,
+   event Insert, HTTP Request, POST, same URL and bearer) also works and needs no
+   extension, but it fires at INSERT time and cannot ask the function to wait out
+   the fold window, so it delivers on the next sweep instead. `pg_net` is the
+   better option because `00018` sends `wait_ms` with the request.
+
+   Without steps 5–6 the feature still works: notices are queued in Postgres and
+   **any open app drains the queue on its presence heartbeat**, so the worst case
+   is a delay of about a minute rather than a lost notification. With them,
+   delivery lands within a few seconds.
+
+### Delivery, in one table
+
+| Configured | Latency | Needs |
+| --- | --- | --- |
+| Nothing | ~45 s (a heartbeat) | a browser with the app open |
+| `pg_net` + Vault (steps 5–6) | a few seconds | nothing of yours running |
+| Dashboard webhook | one heartbeat | a webhook in the dashboard |
+
+`00018`'s trigger is `AFTER INSERT` on `web_push_requests`, fires one
+asynchronous `net.http_post` per *queued* notice — a burst folds into one row, so
+it dispatches once — and runs inside a nested exception block that downgrades any
+failure to a warning. **A webhook outage can never fail the message that
+triggered it**; the notice simply stays queued for the next sweep. That property
+is asserted in `tools/sql-test`.
 
 ### How delivery actually works
 
 `send_message` queues at most one folded row per (recipient, chat) in
 `web_push_requests` — offline recipients only, never the author, never a muted
 or already-read chat, never for traffic the recipient's own Telegram already
-delivered. A sweep calls `web_push_claim`, which leases rows with
+delivered. Migration `00018` then dispatches that queue to `web-push-send`
+through `pg_net` (steps 5–6), and a sweep calls `web_push_claim`, which leases rows with
 `FOR UPDATE SKIP LOCKED` and re-checks immediately before encryption that the
 notice is still owed; then `web_push_owed`, then the POST. Reading the chat,
 muting it, leaving it, coming back online or switching previews off all cancel a
@@ -259,7 +311,7 @@ queued notice and invalidate a live lease. A push service answering 404/410
 deletes that subscription, because it is permanently gone; twenty consecutive
 failures disables one instead of hammering it forever.
 
-One person may register at most **8 browsers**. Endpoints are unique, so signing
+One person may register at most **5 browsers**. Endpoints are unique, so signing
 into a different account in the same browser *moves* the subscription to the new
 account rather than notifying the old one.
 

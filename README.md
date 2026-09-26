@@ -24,7 +24,7 @@ publicly deployed service**.
 Supabase Free can host the database within quotas. The Free database can pause
 when unused. Browser notifications (`00017`) are the one alert path with no
 always-on requirement at all: they need the hosted database, a deployed
-`web-push` function and a VAPID key pair, and nothing else. The old GitHub Pages URL returns 404 and is not the deployment
+`web-push-send` function and a VAPID key pair, and nothing else. The old GitHub Pages URL returns 404 and is not the deployment
 path. Vercel is website hosting only. Neither Vercel, short-lived functions nor
 a sleeping free instance is a durable TDLib user-session worker. We do not have
 a verified $0 always-on host with persistent private session storage. Chatting

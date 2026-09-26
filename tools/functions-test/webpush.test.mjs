@@ -29,6 +29,7 @@ import {
   vapidAuthorization,
 } from '../../supabase/functions/_shared/webpush.ts';
 import { b64urlDecode, b64urlEncode } from '../../supabase/functions/_shared/crypto.ts';
+import { WAIT_MS_MAX, resolveSweepPlan } from '../../supabase/functions/_shared/push-sweep.ts';
 
 const ab = (bytes) => {
   const copy = new Uint8Array(new ArrayBuffer(bytes.byteLength));
@@ -338,5 +339,44 @@ describe('outbound request assembly', () => {
     assert.match(headers.authorization, /^vapid t=/);
     assert.equal(Number(headers['content-length']), request.init.body.byteLength);
     assert.ok(request.init.body.byteLength > 100);
+  });
+});
+
+describe('sweep policy (pg_net triggers the same function the app does)', () => {
+  it('lets a scheduled caller wait out the fold window, and never a user request', () => {
+    // Migration 00018 dispatches at INSERT time; the row is held for 2 s.
+    const scheduled = resolveSweepPlan({ limit: 10, wait_ms: 3000 }, { maxLimit: 25, isScheduled: true });
+    assert.deepEqual(scheduled, { limit: 10, waitMs: 3000 });
+
+    // The same body from a user's tab must not hold that person's request open.
+    const user = resolveSweepPlan({ limit: 10, wait_ms: 3000 }, { maxLimit: 5, isScheduled: false });
+    assert.deepEqual(user, { limit: 5, waitMs: 0 });
+  });
+
+  it('clamps a hostile or mistaken body instead of trusting it', () => {
+    for (const [body, expected] of [
+      [{}, { limit: 25, waitMs: 0 }],
+      [{ limit: 10_000 }, { limit: 25, waitMs: 0 }],
+      [{ limit: 0 }, { limit: 1, waitMs: 0 }],
+      [{ limit: -4, wait_ms: -1 }, { limit: 1, waitMs: 0 }],
+      [{ limit: '7', wait_ms: '2500' }, { limit: 7, waitMs: 2500 }],
+      [{ wait_ms: 600_000 }, { limit: 25, waitMs: WAIT_MS_MAX }],
+      [{ limit: 2.9, wait_ms: 12.7 }, { limit: 2, waitMs: 12 }],
+      ['not an object', { limit: 25, waitMs: 0 }],
+      [null, { limit: 25, waitMs: 0 }],
+    ]) {
+      assert.deepEqual(
+        resolveSweepPlan(body, { maxLimit: 25, isScheduled: true }),
+        expected,
+        `body ${JSON.stringify(body)}`,
+      );
+    }
+  });
+
+  it('keeps the wait well inside an edge invocation budget', () => {
+    // Two sweeps plus this wait is the worst case; it must stay far below any
+    // function wall-clock limit, and above the 2 s fold window it exists for.
+    assert.ok(WAIT_MS_MAX >= 2500, 'long enough to outlast the fold window');
+    assert.ok(WAIT_MS_MAX <= 10_000, 'short enough not to risk a timeout');
   });
 });

@@ -1631,13 +1631,13 @@ await test('a browser can register, is capped, and cannot forge another account\
   eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where user_id = '${U.b}'`)), 1,
      'a delete cannot reach another account');
 
-  // Re-registering the same endpoint is a refresh, not a ninth device.
+  // Re-registering the same endpoint is a refresh, not a sixth device.
   await become(U.a);
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 4; i++) {
     await query(`select public.register_push_subscription($1, $2, $3, 'browser ${i}')`,
       [`https://fcm.googleapis.com/fcm/send/aziz-${i}`, P256DH, PUSH_AUTH]);
   }
-  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where user_id = '${U.a}'`)), 8, 'eight live devices');
+  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where user_id = '${U.a}'`)), 5, 'five live devices before the cap bites');
   await throws(() => query(`select public.register_push_subscription('https://fcm.googleapis.com/fcm/send/one-too-many', $1, $2)`,
     [P256DH, PUSH_AUTH]), /too many registered browsers/);
   await query(`select public.register_push_subscription($1, $2, $3, 'refreshed')`, ['https://fcm.googleapis.com/fcm/send/aziz-laptop', P256DH, PUSH_AUTH]);
@@ -1959,6 +1959,156 @@ await test('a parked notice retries, an expired lease is recovered, and history 
   await becomeOwner();
   await exec(`delete from public.push_subscriptions; delete from public.web_push_requests;
               update public.profiles set last_seen_at = clock_timestamp(), push_web = true, push_preview = true where id = '${U.a}';`);
+});
+
+// ---------------------------------------------------------------------------
+group('browser push dispatch (00018, pg_net)');
+
+/**
+ * PGlite has no pg_net, so this migration is written to apply cleanly without it
+ * and leave the 00017 behaviour untouched — the first test asserts exactly that,
+ * because a migration that only works on the hosted platform is a migration
+ * nobody can run in CI.
+ *
+ * For the rest, a stand-in `net.http_post` is installed with pg_net's real
+ * signature and the migration is re-applied: it is idempotent, and the trigger
+ * is created once `net` exists. That exercises the whole path — the Vault/GUC
+ * lookup, the request body, the bearer token, and the promise that a broken
+ * webhook can never break sending a message.
+ */
+await test('applies without pg_net and leaves 00017 behaviour intact', async () => {
+  await becomeOwner();
+  eq(await scalar(`select to_regnamespace('net') is null`), true, 'PGlite really has no pg_net');
+  eq(await scalar(`select to_regprocedure('app.web_push_dispatch_config()') is not null`), true,
+     'the configuration reader exists either way');
+  eq(await scalar(`select to_regprocedure('app.dispatch_web_push()') is not null`), true);
+  eq(await scalar(`select count(*)::int from pg_trigger where tgname = 'web_push_requests_dispatch'`), 0,
+     'no trigger is created, so nothing can reference a missing extension');
+
+  // And with nothing configured, the reader reports nothing rather than guessing.
+  eq(await scalar(`select count(*)::int from app.web_push_dispatch_config()`), 0);
+});
+
+await test('a queued notice dispatches one signed sweep and never fails the message', async () => {
+  await becomeOwner();
+  // The previous group ended by deleting every subscription; without a live one
+  // no notice is ever queued, so start from a registered browser.
+  await exec(`delete from public.push_subscriptions`);
+  await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/aziz');
+  await becomeOwner();
+  // A function with pg_net's exact signature, recording what it was handed.
+  await exec(`
+    create schema if not exists net;
+    create table if not exists net.calls (
+      id bigserial primary key, url text, body jsonb, headers jsonb, timeout_milliseconds integer
+    );
+    create or replace function net.http_post(
+      url text, body jsonb default '{}'::jsonb, params jsonb default '{}'::jsonb,
+      headers jsonb default '{}'::jsonb, timeout_milliseconds integer default 5000
+    ) returns bigint language plpgsql as $fn$
+    declare v_id bigint;
+    begin
+      insert into net.calls (url, body, headers, timeout_milliseconds)
+      values (url, body, headers, timeout_milliseconds) returning id into v_id;
+      return v_id;
+    end $fn$;
+    delete from net.calls;
+  `);
+  // Re-apply the migration now that `net` exists; it must create the trigger.
+  await exec(readFileSync(join(MIGRATIONS, '00018_web_push_dispatch.sql'), 'utf8'));
+  eq(await scalar(`select count(*)::int from pg_trigger where tgname = 'web_push_requests_dispatch'`), 1,
+     'the trigger appears once the extension surface is there');
+
+  // Incomplete configuration must not dispatch: the function rejects a sweep
+  // with no token, so firing one would be a guaranteed 401.
+  await becomeOwner();
+  await exec(`select set_config('messengerx.push_dispatch_url',
+                                'https://example.supabase.co/functions/v1/web-push-send', false)`);
+  await clearWebPush();
+  await azizAwayForPush();
+  await sendAsDilnoza('needs a token too');
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from net.calls`)), 0, 'a URL without a token dispatches nothing');
+
+  // Now configure both, and a new notice must produce exactly one request.
+  await becomeOwner();
+  await exec(`
+    select set_config('messengerx.push_dispatch_token', 'test-dispatch-token-0123456789abcdef', false);
+    delete from public.web_push_requests;
+    update public.chat_participants set unread_count = 0, muted_until = null
+     where chat_id = '${chatId}' and user_id = '${U.a}';
+  `);
+  await azizAwayForPush();
+  await sendAsDilnoza('dispatch me');
+
+  await becomeOwner();
+  const calls = await query(`select url, body, headers, timeout_milliseconds from net.calls order by id`);
+  eq(calls.length, 1, 'one HTTP request per queued notice');
+  eq(calls[0].url, 'https://example.supabase.co/functions/v1/web-push-send');
+  eq(calls[0].body.limit, 10);
+  eq(calls[0].body.wait_ms, 3000, 'the function is told to wait out the fold window before claiming');
+  eq(calls[0].headers.authorization, 'Bearer test-dispatch-token-0123456789abcdef');
+  eq(calls[0].headers['content-type'], 'application/json');
+  eq(calls[0].timeout_milliseconds, 10000);
+
+  // A burst folds into the same queued row, so it must not dispatch again.
+  await sendAsDilnoza('and another');
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from net.calls`)), 1, 'a folded follow-up does not re-dispatch');
+});
+
+await test('a failing webhook warns but never breaks the message that triggered it', async () => {
+  await becomeOwner();
+  await exec(`
+    create schema if not exists net;
+    create table if not exists net.calls (
+      id bigserial primary key, url text, body jsonb, headers jsonb, timeout_milliseconds integer
+    );
+    delete from public.push_subscriptions;
+    delete from net.calls;
+    create or replace function net.http_post(
+      url text, body jsonb default '{}'::jsonb, params jsonb default '{}'::jsonb,
+      headers jsonb default '{}'::jsonb, timeout_milliseconds integer default 5000
+    ) returns bigint language plpgsql as $fn$
+    begin
+      raise exception 'pg_net is having a bad day' using errcode = '58000';
+    end $fn$;
+  `);
+  await becomeOwner();
+  await exec(`select set_config('messengerx.push_dispatch_url',
+                                'https://example.supabase.co/functions/v1/web-push-send', false)`);
+  await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/aziz');
+  await clearWebPush();
+  await azizAwayForPush();
+  await becomeOwner();
+  await exec(`update public.chat_participants set unread_count = 0, muted_until = null
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+
+  // The message must still be sent, and the notice must still be queued for the
+  // heartbeat sweep to find later. This is the property that makes it safe to
+  // put an HTTP call in a trigger at all.
+  await sendAsDilnoza('webhook is down');
+  eq(await webCount(U.a, 'queued'), 1, 'the notice survives a failed dispatch');
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from public.messages where body = 'webhook is down'`)), 1,
+     'and the sender\'s message is unaffected');
+
+  // The alert was never sent, so claiming it now must still work.
+  await becomeOwner();
+  await exec(`update public.web_push_requests set next_attempt_at = clock_timestamp() - interval '1 second'`);
+  await becomeService();
+  const rows = await query(`select * from public.web_push_claim('sender-after-outage', 5)`);
+  eq(rows.length, 1, 'the queued notice is still claimable after the outage');
+
+  await becomeOwner();
+  await exec(`
+    delete from public.web_push_requests;
+    select set_config('messengerx.push_dispatch_url', '', false);
+    select set_config('messengerx.push_dispatch_token', '', false);
+    update public.chat_participants set unread_count = 0, muted_until = null
+     where chat_id = '${chatId}' and user_id = '${U.a}';
+    update public.profiles set last_seen_at = clock_timestamp() where id = '${U.a}';
+  `);
 });
 
 // ---------------------------------------------------------------------------

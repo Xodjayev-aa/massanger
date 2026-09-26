@@ -113,7 +113,7 @@ verify_jwt = false
 # the function authenticates both entry points itself: a Supabase session for the
 # sender's tab, or WEB_PUSH_SWEEP_TOKEN for the scheduled sweep. A deployment
 # with no VAPID secrets reports the feature as unconfigured instead of failing.
-[functions.web-push]
+[functions.web-push-send]
 enabled = true
 verify_jwt = false
 

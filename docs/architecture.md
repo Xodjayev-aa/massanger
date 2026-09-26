@@ -128,10 +128,32 @@ deliver is not announced twice.
 runs `bridge_claim_notify`'s three maintenance passes first (retire rows nobody
 is owed, fail exhausted ones, recover leases whose holder died — the lease *is*
 `next_attempt_at`), and re-checks `web_push_owed` immediately before encrypting.
-A sweep is idempotent, so losing one costs latency: the `web-push` function does
-one now, a database webhook can do one on insert, and **any open app drains the
-queue on its presence heartbeat** (`PushRepository.sweep`), which is what makes
-the feature work with no scheduler configured at all.
+A sweep is idempotent, so losing one costs latency, never a message, and there
+are three independent ways one gets triggered: `00018`'s `pg_net` trigger fires
+one the instant a notice is queued, **any open app drains the queue on its
+presence heartbeat** (`PushRepository.sweep`), and the function can be called by
+hand. Only the first is fast; only the second is required, and it is what makes
+this work with nothing configured and nothing running.
+
+**`pg_net` (migration 00018).** The `web_push_requests` AFTER INSERT trigger
+reads its URL and token from Vault (or a database-local GUC) *at call time* —
+never from the migration, because `pg_proc.prosrc` is readable by more roles than
+a secret should be — and posts one asynchronous sweep. Two properties make an
+HTTP call inside a trigger acceptable here:
+
+1. Everything is created only `if to_regnamespace('net') is not null`, so a
+   database without the extension applies the migration and behaves exactly as
+   00017 left it. `00001` treats pgcrypto the same way.
+2. The dispatch runs in a nested `BEGIN/EXCEPTION` and reports trouble as a
+   *warning*. The queue row is already committed when the trigger runs, so a
+   webhook outage cannot fail the message and cannot lose the notice.
+
+The dispatcher sends `wait_ms: 3000`, which the function honours only for the
+token-authenticated caller: a notice is held for a 2 s fold window, so the
+webhook necessarily arrives *before* the row is due. Holding the invocation and
+claiming again is cheaper and more honest than sleeping inside a sender's
+transaction, and it keeps the fold working — a burst produces one row, one
+dispatch and one notification. A user's sweep is never held open for this.
 
 **Failure is per subscription, not per notice.** A push service answering
 404/410 is saying the subscription is permanently gone, so

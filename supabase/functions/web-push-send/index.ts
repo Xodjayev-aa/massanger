@@ -1,5 +1,5 @@
 /**
- * web-push — the only thing that sends a browser notification.
+ * web-push-send — the only thing that sends a browser notification.
  *
  * Two entry points on one route:
  *
@@ -23,11 +23,18 @@
  *     and mirrors `telegram-send`: the sender's tab, which is online by
  *     definition, pokes us right after `send_message` returns. It buys
  *     immediacy; correctness never depends on it.
- *   • The scheduled/webhook path, with WEB_PUSH_SWEEP_TOKEN. A dashboard
- *     database webhook or a `pg_cron` job can call this so notices are still
- *     delivered when the sender's tab dies mid-send. Without that scheduled
- *     caller the feature still works — it is just only as immediate as the next
- *     person who sends a message.
+ *   • The scheduled/webhook path, with WEB_PUSH_SWEEP_TOKEN. Migration `00018`
+ *     makes `pg_net` POST here the instant a notice is queued, so this is the
+ *     path that delivers within seconds with no machine of ours running and no
+ *     scheduler for the operator to configure. Without it the feature still
+ *     works — it is just only as immediate as the next heartbeat (00017).
+ *
+ * The scheduled caller is also the only one allowed to *wait* (`wait_ms`): a
+ * notice is held for a 2 s fold window, so a webhook fired at INSERT time
+ * arrives before the row is due. Rather than sleeping inside somebody's
+ * message transaction or asking the operator to install `pg_cron`, the
+ * invocation is held briefly and claims again. A user's request is never held
+ * open for this. See `_shared/push-sweep.ts`.
  *
  * The function is deployed with `verify_jwt = false` because the scheduled
  * caller has no Supabase session. Both paths are therefore authenticated by
@@ -42,8 +49,9 @@ import { timingSafeEqual } from '../_shared/crypto.ts';
 import { enforce } from '../_shared/rate-limit.ts';
 import { HttpError } from '../_shared/types.ts';
 import { buildPushRequest, loadVapidKeys, type VapidKeys } from '../_shared/webpush.ts';
+import { resolveSweepPlan, WAIT_MS_MAX } from '../_shared/push-sweep.ts';
 
-const FUNCTION_NAME = 'web-push';
+const FUNCTION_NAME = 'web-push-send';
 
 /** A sender's tab may drain a few rows; the scheduled caller may drain more. */
 const USER_SWEEP_LIMIT = 5;
@@ -267,31 +275,41 @@ async function handle(request: Request): Promise<Response> {
     let limit = SCHEDULED_SWEEP_LIMIT;
     let worker = `scheduled-${crypto.randomUUID()}`;
     if (isScheduled) {
-      enforce('web-push:ip', clientIp(req) ?? 'unknown', 240);
+      enforce('web-push-send:ip', clientIp(req) ?? 'unknown', 240);
     } else {
       // A user-triggered sweep is a latency optimisation, so it is bounded and
       // rate-limited: it must never become a way to make us spend money.
       const caller = await requireUser(env, token);
-      enforce('web-push:uid', caller.uid, 30, 60_000);
-      enforce('web-push:ip', clientIp(req) ?? 'unknown', 600);
+      enforce('web-push-send:uid', caller.uid, 30, 60_000);
+      enforce('web-push-send:ip', clientIp(req) ?? 'unknown', 600);
       limit = USER_SWEEP_LIMIT;
       worker = `sender-${caller.uid.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}`;
     }
 
-    const body = await readJsonBody<{ limit?: number }>(req, env.maxBodyBytes);
-    const requested = typeof body.limit === 'number' && Number.isFinite(body.limit)
-      ? Math.min(Math.max(Math.trunc(body.limit), 1), SCHEDULED_SWEEP_LIMIT)
-      : limit;
+    const body = await readJsonBody<Record<string, unknown>>(req, env.maxBodyBytes);
+    const plan = resolveSweepPlan(body, { maxLimit: limit, isScheduled });
 
     const keys = await loadVapidKeys(env.webPushVapidPublicKey!, env.webPushVapidPrivateKey!);
-    const result = await sweep(admin, keys, {
-      limit: Math.min(requested, limit),
+    const sweepOnce = () => sweep(admin, keys, {
+      limit: plan.limit,
       subject: env.webPushVapidSubject!,
       extraEndpointHosts: env.webPushEndpointHosts,
       worker,
     });
 
-    log.info('sweep complete', { ...result, scheduled: isScheduled, worker });
+    let result = await sweepOnce();
+
+    // The webhook fires at INSERT time, but the row is deliberately held for a
+    // 2 s quiet window so a burst folds into one notification — so arriving
+    // early is the *expected* case, not an error. Hold this invocation and try
+    // once more rather than leaving the notice for the next heartbeat.
+    if (plan.waitMs > 0 && result.claimed === 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(plan.waitMs, WAIT_MS_MAX)));
+      const second = await sweepOnce();
+      result = { ...second, claimed: second.claimed };
+    }
+
+    log.info('sweep complete', { ...result, scheduled: isScheduled, waited_ms: plan.waitMs, worker });
     return ok(result, cors);
   }, (req) => corsHeaders(req.headers.get('origin'), env.allowedOrigins))(request);
 }

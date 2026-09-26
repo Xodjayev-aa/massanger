@@ -29,11 +29,11 @@ void registerDependencies({required AppEnv env, required SupabaseClient client})
     )
     ..registerLazySingleton<ChatRepository>(() => ChatRepository(client))
     ..registerLazySingleton<TelegramRepository>(() => TelegramRepository(client))
-    // Browser notifications read their VAPID key from the public `web-push`
+    // Browser notifications read their VAPID key from the public `web-push-send`
     // function, so the URL comes from the same build configuration as every
     // other function call rather than from a hard-coded host.
     ..registerLazySingleton<PushRepository>(
-      () => PushRepository(client, pushConfigUrl: env.functionsPath('web-push').toString()),
+      () => PushRepository(client, pushConfigUrl: env.functionsPath('web-push-send').toString()),
     )
     ..registerLazySingleton<VoiceService>(VoiceService.new)
     ..registerLazySingleton<VoicePlayer>(VoicePlayer.new);

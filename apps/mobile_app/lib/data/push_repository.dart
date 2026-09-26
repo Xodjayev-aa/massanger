@@ -74,7 +74,7 @@ class PushRepository {
 
   final SupabaseClient _client;
 
-  /// The public `web-push` function URL, which serves the VAPID public key.
+  /// The public `web-push-send` function URL, which serves the VAPID public key.
   /// Passed in rather than read from a global so a test can point it anywhere.
   final String _pushConfigUrl;
 

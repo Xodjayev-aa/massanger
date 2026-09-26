@@ -313,7 +313,7 @@ The hosted project previously had **no migrations applied**. Pushing applies
    supabase functions deploy telegram-send
    supabase functions deploy telegram-ingest
    supabase functions deploy account-age-gate
-   supabase functions deploy web-push --no-verify-jwt
+   supabase functions deploy web-push-send --no-verify-jwt
    ```
 
    Then in the dashboard confirm:
@@ -322,7 +322,7 @@ The hosted project previously had **no migrations applied**. Pushing applies
      JWT. The function still requires the private bridge bearer **and** HMAC.
      Never turn that application check off, and never put those credentials
      in the Flutter app.
-   - `web-push`: platform JWT **off** as well, because its scheduled caller (a
+   - `web-push-send`: platform JWT **off** as well, because its scheduled caller (a
      database webhook or `pg_cron`) has no session either. Both of its entry
      points authenticate themselves: a Supabase session for a sender's tab, or
      `WEB_PUSH_SWEEP_TOKEN` for the scheduled sweep. It is optional — with no

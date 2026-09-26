@@ -445,9 +445,10 @@ security definer
 set search_path = pg_catalog, public
 as $$
 declare
-  -- Enough for phone + laptop + tablet across two browsers, small enough that a
-  -- bug cannot turn the table into an unbounded notification fan-out.
-  c_max_devices constant integer := 8;
+  -- Phone + laptop + tablet across a couple of browsers. Deliberately small:
+  -- this is a notification fan-out, not storage, and every extra endpoint is
+  -- another place a message preview could appear.
+  c_max_devices constant integer := 5;
   v_uid    uuid := app.current_uid();
   v_row    public.push_subscriptions%rowtype;
   v_active integer;
