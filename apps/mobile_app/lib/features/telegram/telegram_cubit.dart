@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/errors.dart';
 import '../../data/models.dart';
+import '../../data/push_repository.dart';
 import '../../data/telegram_repository.dart';
 
 enum TelegramLoadStatus { initial, loading, ready, failure }
@@ -13,6 +14,7 @@ class TelegramPanel extends Equatable {
     this.account,
     this.chats = const <MirroredChat>[],
     this.pushPreferences,
+    this.browserPush,
     this.busy = false,
     this.error,
   });
@@ -21,6 +23,10 @@ class TelegramPanel extends Equatable {
   final TelegramStatus? account;
   final List<MirroredChat> chats;
   final PushPreferences? pushPreferences;
+
+  /// Browser notifications. Null until the panel has loaded, and
+  /// `unavailable` when this build or browser cannot raise one at all.
+  final BrowserPushState? browserPush;
   final bool busy;
   final Object? error;
 
@@ -31,6 +37,7 @@ class TelegramPanel extends Equatable {
     TelegramStatus? account,
     List<MirroredChat>? chats,
     PushPreferences? pushPreferences,
+    BrowserPushState? browserPush,
     bool? busy,
     Object? error = _keep,
   }) =>
@@ -39,6 +46,7 @@ class TelegramPanel extends Equatable {
         account: account ?? this.account,
         chats: chats ?? this.chats,
         pushPreferences: pushPreferences ?? this.pushPreferences,
+        browserPush: browserPush ?? this.browserPush,
         busy: busy ?? this.busy,
         error: identical(error, _keep) ? this.error : error,
       );
@@ -46,13 +54,14 @@ class TelegramPanel extends Equatable {
   static const Object _keep = Object();
 
   @override
-  List<Object?> get props => <Object?>[status, account, chats, pushPreferences, busy, error];
+  List<Object?> get props => <Object?>[status, account, chats, pushPreferences, browserPush, busy, error];
 }
 
 class TelegramCubit extends Cubit<TelegramPanel> {
-  TelegramCubit(this._repository) : super(const TelegramPanel());
+  TelegramCubit(this._repository, this._pushRepository) : super(const TelegramPanel());
 
   final TelegramRepository _repository;
+  final PushRepository _pushRepository;
 
   Future<void> load() async {
     emit(state.copyWith(status: TelegramLoadStatus.loading, error: null));
@@ -61,12 +70,17 @@ class TelegramCubit extends Cubit<TelegramPanel> {
         _repository.status(),
         _repository.mirroredChats(),
         _repository.pushPreferences(),
+        // Reads the browser as well as the server, and answers `unavailable`
+        // rather than failing, so a native build or an unmigrated database
+        // costs the panel one row instead of the whole screen.
+        _pushRepository.load(),
       ]);
       emit(state.copyWith(
         status: TelegramLoadStatus.ready,
         account: results[0] as TelegramStatus,
         chats: results[1] as List<MirroredChat>,
         pushPreferences: results[2] as PushPreferences,
+        browserPush: results[3] as BrowserPushState,
       ));
     } catch (error) {
       emit(state.copyWith(status: TelegramLoadStatus.failure, error: error));
@@ -99,6 +113,30 @@ class TelegramCubit extends Cubit<TelegramPanel> {
       // Do not optimistically show a preview switch that the server refused.
       final saved = await _repository.setPushPreferences(telegram: telegram, preview: preview);
       emit(state.copyWith(pushPreferences: saved, busy: false));
+    } catch (error) {
+      emit(state.copyWith(busy: false, error: AppException.wrap(error)));
+    }
+  }
+
+  /// The switch's tap. Turning it on must reach the browser *inside* the tap,
+  /// which is why this path does not go through the generic preference writer:
+  /// the permission prompt has to stay user-initiated or Safari and Firefox
+  /// silently refuse it.
+  Future<void> setBrowserPush(bool enabled) async {
+    emit(state.copyWith(busy: true, error: null));
+    try {
+      final next = enabled ? await _pushRepository.turnOn() : await _pushRepository.turnOff();
+      emit(state.copyWith(browserPush: next, busy: false));
+    } catch (error) {
+      emit(state.copyWith(busy: false, error: AppException.wrap(error)));
+    }
+  }
+
+  /// Revoke this browser's subscription and free its device slot.
+  Future<void> forgetBrowser() async {
+    emit(state.copyWith(busy: true, error: null));
+    try {
+      emit(state.copyWith(browserPush: await _pushRepository.forgetThisBrowser(), busy: false));
     } catch (error) {
       emit(state.copyWith(busy: false, error: AppException.wrap(error)));
     }

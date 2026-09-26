@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart' show SupabaseClient;
 
 import '../data/account_repository.dart';
 import '../data/chat_repository.dart';
+import '../data/push_repository.dart';
 import '../data/telegram_repository.dart';
 import '../features/auth/auth_bloc.dart';
 import '../features/chats/chats_bloc.dart';
@@ -60,7 +61,18 @@ class _MessengerXAppState extends State<MessengerXApp> with WidgetsBindingObserv
     if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
     _heartbeat = Timer.periodic(const Duration(seconds: 45), (_) {
       if (_auth.state.status == AppStatus.ready) unawaited(_auth.refreshPresence());
+      _sweepBrowserPush();
     });
+  }
+
+  /// Browser notifications have no server of ours polling for work, so any app
+  /// that is already awake drains the queue. Riding the presence heartbeat means
+  /// the feature needs no scheduler to be configured at all; the documented
+  /// database webhook is what makes it immediate rather than within a minute.
+  /// Best effort every time: `web_push_claim` is what decides what may be sent.
+  void _sweepBrowserPush() {
+    if (!sl.isRegistered<PushRepository>()) return;
+    unawaited(sl<PushRepository>().sweep());
   }
 
   @override
@@ -68,6 +80,9 @@ class _MessengerXAppState extends State<MessengerXApp> with WidgetsBindingObserv
     if (state == AppLifecycleState.resumed) {
       unawaited(_auth.refreshPresence());
       unawaited(_chats.refresh());
+      // Coming back online is the most likely moment for a backlog of notices
+      // somebody else queued to still be waiting.
+      _sweepBrowserPush();
       _startHeartbeat();
       return;
     }

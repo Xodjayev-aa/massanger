@@ -1559,6 +1559,559 @@ await test('rate limits persist in SQL instead of relying on an edge process cac
 });
 
 // ---------------------------------------------------------------------------
+group('browser push (00017)');
+
+/**
+ * The other half of the notice story. 00012's queue needs a live TDLib session;
+ * this one needs nothing but the browser's own subscription, which is what makes
+ * an alert possible without an always-on worker. The rules that matter — offline
+ * only, never for your own message, never when the user read it — are shared
+ * with 00012 on purpose, so they are asserted here against the web queue too.
+ */
+const webRows = async (userId = U.a) => {
+  await becomeOwner();
+  return query(`select * from public.web_push_requests where user_id = '${userId}' order by id`);
+};
+const webCount = async (userId = U.a, state = 'queued') => {
+  await becomeOwner();
+  return Number(await scalar(
+    `select count(*)::int from public.web_push_requests where user_id = '${userId}' and state = '${state}'`));
+};
+// A well-formed 65-byte P-256 point and a 16-byte auth secret, base64url.
+const P256DH = 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4';
+const PUSH_AUTH = 'BTBZMqHH6r4Tts7J_aSIgg';
+const subscribe = async (uid, endpoint = `https://fcm.googleapis.com/fcm/send/${uid}`) => {
+  await become(uid);
+  const [row] = await query(
+    `select public.register_push_subscription($1, $2, $3, 'test browser') as s`, [endpoint, P256DH, PUSH_AUTH]);
+  return row.s;
+};
+const clearWebPush = async () => {
+  await becomeOwner();
+  await exec(`delete from public.web_push_requests`);
+};
+const azizAwayForPush = async () => {
+  await becomeOwner();
+  await exec(`update public.profiles
+                 set last_seen_at = clock_timestamp() - interval '10 minutes',
+                     access_state = 'active', deleted_at = null,
+                     push_web = true, push_preview = true
+               where id = '${U.a}'`);
+};
+
+await test('a browser can register, is capped, and cannot forge another account\'s row', async () => {
+  await becomeOwner();
+  await exec(`delete from public.push_subscriptions; delete from public.web_push_requests;`);
+
+  const registered = await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/aziz-laptop');
+  assert(registered.id, 'the RPC returns the row id');
+  eq(registered.label, 'test browser');
+
+  // Shape checks are the database's job too, not only the edge function's.
+  await become(U.a);
+  await throws(() => query(`select public.register_push_subscription('https://fcm.googleapis.com/x', 'not-a-key', $1)`, [PUSH_AUTH]),
+    /base64url P-256 point/);
+  await throws(() => query(`select public.register_push_subscription('https://fcm.googleapis.com/x', $1, 'short')`, [P256DH]),
+    /16 base64url bytes/);
+  await throws(() => query(`select public.register_push_subscription('http://x', $1, $2)`, [P256DH, PUSH_AUTH]),
+    /at least 16|between 16/);
+
+  // A client cannot insert directly: writes go through the RPC, so the device
+  // cap and the endpoint's single ownership cannot be bypassed.
+  await throws(() => query(
+    `insert into public.push_subscriptions (user_id, endpoint, p256dh, auth) values ('${U.a}', 'https://fcm.googleapis.com/fcm/send/direct', $1, $2)`,
+    [P256DH, PUSH_AUTH]), /permission denied|row-level security/);
+
+  // ...and cannot see or delete anybody else's row.
+  await subscribe(U.b, 'https://fcm.googleapis.com/fcm/send/dilnoza');
+  await become(U.a);
+  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions`)), 1, 'RLS scopes the listing');
+  await query(`delete from public.push_subscriptions where user_id = '${U.b}'`);
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where user_id = '${U.b}'`)), 1,
+     'a delete cannot reach another account');
+
+  // Re-registering the same endpoint is a refresh, not a sixth device.
+  await become(U.a);
+  for (let i = 0; i < 4; i++) {
+    await query(`select public.register_push_subscription($1, $2, $3, 'browser ${i}')`,
+      [`https://fcm.googleapis.com/fcm/send/aziz-${i}`, P256DH, PUSH_AUTH]);
+  }
+  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where user_id = '${U.a}'`)), 5, 'five live devices before the cap bites');
+  await throws(() => query(`select public.register_push_subscription('https://fcm.googleapis.com/fcm/send/one-too-many', $1, $2)`,
+    [P256DH, PUSH_AUTH]), /too many registered browsers/);
+  await query(`select public.register_push_subscription($1, $2, $3, 'refreshed')`, ['https://fcm.googleapis.com/fcm/send/aziz-laptop', P256DH, PUSH_AUTH]);
+
+  // The same browser signing in as somebody else must stop notifying the first
+  // account: the endpoint is unique, so the row moves rather than duplicates.
+  await subscribe(U.b, 'https://fcm.googleapis.com/fcm/send/aziz-laptop');
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where endpoint = 'https://fcm.googleapis.com/fcm/send/aziz-laptop'`)), 1);
+  eq(await scalar(`select user_id::text from public.push_subscriptions where endpoint = 'https://fcm.googleapis.com/fcm/send/aziz-laptop'`),
+     U.b, 'ownership moved to the account that registered it last');
+
+  await becomeOwner();
+  await exec(`delete from public.push_subscriptions`);
+});
+
+await test('a message to an away user with a registered browser queues one folded notice', async () => {
+  await becomeOwner();
+  await exec(`delete from public.push_subscriptions; delete from public.web_push_requests;
+              update public.chat_participants set unread_count = 0, muted_until = null, left_at = null
+               where chat_id = '${chatId}'`);
+  await azizAwayForPush();
+  await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/aziz');
+
+  await sendAsDilnoza('web push bir');
+  let rows = await webRows(U.a);
+  eq(rows.length, 1, 'one queued notice');
+  eq(rows[0].state, 'queued');
+  eq(rows[0].folded, 1);
+  eq(rows[0].sender_name, 'Dilnoza Rustamova', 'the same human label the chat list shows');
+  eq(rows[0].preview, 'web push bir');
+
+  await sendAsDilnoza('web push ikki');
+  rows = await webRows(U.a);
+  eq(rows.length, 1, 'a burst folds instead of stacking');
+  eq(rows[0].folded, 2);
+  eq(rows[0].preview, 'web push ikki', 'the newest text wins');
+
+  // The dashboard does not need a subscription, and a system message is not news.
+  eq(await webCount(U.a), 1);
+});
+
+await test('nothing is queued while the app is foregrounded, offline-less, or Telegram already delivered it', async () => {
+  await clearWebPush();
+  // A heartbeat two seconds ago means the app is open: the in-app banner owns this.
+  await becomeOwner();
+  await exec(`update public.profiles set last_seen_at = clock_timestamp() where id = '${U.a}'`);
+  await sendAsDilnoza('app is open');
+  eq(await webCount(U.a), 0, 'a foregrounded app is not notified');
+
+  // Away again, but now with no registered browser: queueing would only create a
+  // row the sender has to skip.
+  await azizAwayForPush();
+  await becomeOwner();
+  await exec(`update public.push_subscriptions set disabled_at = clock_timestamp() where user_id = '${U.a}'`);
+  await sendAsDilnoza('no browser left');
+  eq(await webCount(U.a), 0, 'no live subscription means no notice');
+
+  // Switch the preference off, with a live browser.
+  await becomeOwner();
+  await exec(`update public.push_subscriptions set disabled_at = null where user_id = '${U.a}'`);
+  await become(U.a);
+  eq((await query(`select public.set_web_push_enabled(false) as on`))[0].on, false);
+  await sendAsDilnoza('push switched off');
+  eq(await webCount(U.a), 0, 'the switch is honoured');
+
+  // The user's own message never buzzes them.
+  await become(U.a);
+  await query(`select public.set_web_push_enabled(true)`);
+  await clearWebPush();
+  await azizAwayForPush();
+  await become(U.a);
+  await rpc('public.send_message', `'${chatId}', 'text', 'my own words', null, null, null`);
+  eq(await webCount(U.a), 0, 'the sender does not notify themselves');
+
+  // Traffic that arrived *from* Telegram into a chat this recipient mirrors is
+  // already buzzing on their phone. 00012 suppresses it; so must 00017, or the
+  // two transports disagree about what a duplicate is.
+  await clearWebPush();
+  await becomeOwner();
+  await exec(`insert into public.telegram_chats
+                (owner_user_id, tg_chat_id, tg_chat_type, chat_id, peer_user_id, sync_direction)
+              values ('${U.a}', ${TG_CHAT_STR}, 'private', '${chatId}', 9999, 'off')`);
+  await exec(`insert into public.messages (chat_id, sender_id, kind, body, source, tg_message_id)
+              select '${chatId}', '${U.b}', 'text', 'telegram carried this', 'telegram', 424242`);
+  eq(await webCount(U.a), 0, 'a Telegram-delivered message is not announced again');
+
+  await becomeOwner();
+  await exec(`delete from public.web_push_requests;
+              delete from public.telegram_chats where owner_user_id = '${U.a}' and chat_id = '${chatId}';
+              update public.chat_participants set unread_count = 0, muted_until = null, left_at = null
+                where chat_id = '${chatId}'`);
+
+  // The same text over the app path *is* queued, so the suppression above came
+  // from the Telegram mirror and not from the message simply being unremarkable.
+  await azizAwayForPush();
+  await sendAsDilnoza('app path, same shape');
+  eq(await webCount(U.a), 1, 'the app path still notifies');
+});
+
+await test('the sender leases, re-checks, and reports a delivery', async () => {
+  await clearWebPush();
+  await azizAwayForPush();
+  await becomeOwner();
+  await exec(`update public.chat_participants set unread_count = 0, muted_until = null
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await sendAsDilnoza('lease me');
+  await becomeOwner();
+  await exec(`update public.web_push_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+               where user_id = '${U.a}' and state = 'queued'`);
+
+  await becomeService();
+  const [leased] = await query(`select * from public.web_push_claim('sender-1', 5)`);
+  assert(leased, 'the sweep claims the due notice');
+  eq(String(leased.user_id), U.a);
+  eq(leased.sender_name, 'Dilnoza Rustamova');
+  eq(leased.preview, 'lease me');
+  eq(leased.folded, 1);
+  eq(leased.chat_kind, 'direct');
+  eq(leased.attempts, 1, 'the attempt is counted before the send, not after');
+  eq(await scalar(`select state::text from public.web_push_requests where id = $1`, [leased.id]), 'in_flight');
+  eq((await query(`select * from public.web_push_claim('sender-2', 5)`)).length, 0, 'a lease is exclusive');
+
+  const targets = await query(`select * from public.web_push_targets(array['${U.a}']::uuid[])`);
+  eq(targets.length, 1, 'only live subscriptions are targets');
+  eq(targets[0].endpoint, 'https://fcm.googleapis.com/fcm/send/aziz');
+
+  // The last-moment gate: a different sender, or text that was scrubbed after
+  // the claim, must not be delivered.
+  eq(await scalar(`select public.web_push_owed($1, 'sender-2')`, [leased.id]), false, 'only the lease holder may send');
+  eq(await scalar(`select public.web_push_owed($1, 'sender-1', 'lease me')`, [leased.id]), true);
+  eq(await scalar(`select public.web_push_owed($1, 'sender-1', 'stale text')`, [leased.id]), false,
+     'a preview that changed since the claim is refused');
+
+  eq(await scalar(`select public.web_push_complete($1, 'sent', 2, null, null)`, [leased.id]), true);
+  await becomeOwner();
+  const [done] = await query(`select state::text as state, delivered_count from public.web_push_requests where id = $1`, [leased.id]);
+  eq(done.state, 'sent');
+  eq(done.delivered_count, 2, 'how many browsers accepted it is recorded');
+  await becomeService();
+  eq(await scalar(`select public.web_push_complete($1, 'failed', 0, 'too late', null)`, [leased.id]), false,
+     'a late report cannot rewrite a finished row');
+});
+
+await test('reading the chat cancels the notice and kills a live lease', async () => {
+  await clearWebPush();
+  await azizAwayForPush();
+  await becomeOwner();
+  await exec(`update public.chat_participants set unread_count = 0, muted_until = null
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await sendAsDilnoza('read me first');
+
+  await becomeOwner();
+  await exec(`update public.web_push_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+               where state = 'queued'`);
+  await becomeService();
+  const [leased] = await query(`select * from public.web_push_claim('sender-1', 5)`);
+  eq(await webCount(U.a, 'queued'), 0, 'the row is in flight, not queued');
+
+  await become(U.a);
+  await rpc('public.mark_chat_read', `'${chatId}'`);
+  await becomeService();
+  eq(await scalar(`select public.web_push_owed($1, 'sender-1')`, [leased.id]), false,
+     'the read reached the lease before the encrypted payload did');
+  eq(await scalar(`select state::text from public.web_push_requests where id = $1`, [leased.id]), 'skipped');
+  eq(await scalar(`select public.web_push_complete($1, 'sent', 1, null, null)`, [leased.id]), false,
+     'a cancelled row cannot be reported as sent');
+
+  // A notice that arrives while the app is open is never queued at all.
+  await becomeOwner();
+  await exec(`update public.profiles set last_seen_at = clock_timestamp() where id = '${U.a}'`);
+  await sendAsDilnoza('arrived while open');
+  eq(await webCount(U.a), 0);
+});
+
+await test('turning previews off scrubs a notice already leased by the sender', async () => {
+  await clearWebPush();
+  await azizAwayForPush();
+  await becomeOwner();
+  await exec(`update public.chat_participants set unread_count = 0, muted_until = null
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await sendAsDilnoza('private words');
+  await becomeOwner();
+  await exec(`update public.web_push_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+               where state = 'queued'`);
+  await becomeService();
+  const [leased] = await query(`select * from public.web_push_claim('sender-1', 5)`);
+  eq(await scalar(`select public.web_push_owed($1, 'sender-1', 'private words')`, [leased.id]), true);
+
+  await become(U.a);
+  await query(`select public.set_push_preferences(null, false)`);
+  await becomeService();
+  eq(await scalar(`select public.web_push_owed($1, 'sender-1', 'private words')`, [leased.id]), false,
+     'the claimed text no longer matches, so the sender must drop it');
+  await becomeOwner();
+  eq(await scalar(`select preview from public.web_push_requests where id = $1`, [leased.id]), '',
+     'the stored preview is gone, not merely hidden');
+  await become(U.a);
+  await query(`select public.set_push_preferences(null, true)`);
+});
+
+await test('the queue is invisible to clients and sends are not theirs to start', async () => {
+  await become(U.a);
+  await throws(() => query(`select count(*) from public.web_push_requests`), /permission denied/);
+  await throws(() => query(
+    `insert into public.web_push_requests (user_id, chat_id, sender_name) values ('${U.a}', '${chatId}', 'forged')`),
+    /permission denied/);
+  await throws(() => query(`select * from public.web_push_claim('attacker', 5)`), /permission denied/);
+  await throws(() => query(`select * from public.web_push_targets(array['${U.b}']::uuid[])`), /permission denied/);
+  await throws(() => query(`select public.web_push_complete(gen_random_uuid(), 'sent')`), /permission denied/);
+  await throws(() => query(`select public.prune_web_push_requests()`), /permission denied/);
+  await throws(() => query(`select public.prune_push_subscriptions()`), /permission denied/);
+  await throws(() => query(`select public.web_push_owed(gen_random_uuid(), 'x')`), /permission denied/);
+});
+
+await test('a dead endpoint is deleted, a flaky one is disabled, a success clears the record', async () => {
+  await becomeOwner();
+  await exec(`delete from public.push_subscriptions; delete from public.web_push_requests;
+              update public.profiles set push_preview = true where id = '${U.a}'`);
+  await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/gone');
+  await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/flaky');
+  await becomeOwner();
+  const gone = await scalar(`select id::text from public.push_subscriptions where endpoint = 'https://fcm.googleapis.com/fcm/send/gone'`);
+  const flaky = await scalar(`select id::text from public.push_subscriptions where endpoint = 'https://fcm.googleapis.com/fcm/send/flaky'`);
+
+  await becomeService();
+  // 404/410 is "this subscription no longer exists": retrying can never help.
+  eq(await scalar(`select public.web_push_target_result('${gone}', false, true, 'HTTP 410')`), true);
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where id = '${gone}'`)), 0,
+     'the dead subscription is removed');
+
+  await becomeService();
+  for (let i = 0; i < 19; i++) {
+    await scalar(`select public.web_push_target_result('${flaky}', false, false, 'HTTP 503')`);
+  }
+  await becomeOwner();
+  eq(await scalar(`select disabled_at is null from public.push_subscriptions where id = '${flaky}'`), true,
+     'nineteen transient failures are not enough to give up');
+  await becomeService();
+  await scalar(`select public.web_push_target_result('${flaky}', false, false, 'HTTP 503')`);
+  await becomeOwner();
+  eq(await scalar(`select disabled_at is not null from public.push_subscriptions where id = '${flaky}'`), true,
+     'the twentieth disables it instead of hammering a broken endpoint forever');
+  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where user_id = '${U.a}' and disabled_at is null`)), 0);
+  await becomeOwner();
+  await exec(`update public.profiles set last_seen_at = clock_timestamp() - interval '10 minutes' where id = '${U.a}'`);
+  await sendAsDilnoza('nobody to tell');
+  eq(await webCount(U.a), 0, 'a disabled endpoint is not a delivery target');
+
+  // Registering again proves the browser works, so the counter is forgiven.
+  await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/flaky');
+  await becomeOwner();
+  eq(await scalar(`select disabled_at is null from public.push_subscriptions where id = '${flaky}'`), true,
+     're-registering revives the row');
+  await becomeService();
+  await scalar(`select public.web_push_target_result('${flaky}', true, false, null)`);
+  await becomeOwner();
+  eq(Number(await scalar(`select error_count from public.push_subscriptions where id = '${flaky}'`)), 0);
+  eq(await scalar(`select last_success_at is not null from public.push_subscriptions where id = '${flaky}'`), true);
+});
+
+await test('a parked notice retries, an expired lease is recovered, and history is pruned', async () => {
+  await becomeOwner();
+  await exec(`delete from public.web_push_requests;
+              update public.profiles set last_seen_at = clock_timestamp() - interval '10 minutes' where id = '${U.a}';
+              update public.chat_participants set unread_count = 0, muted_until = null
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+  await sendAsDilnoza('park me');
+  await becomeOwner();
+  await exec(`update public.web_push_requests set next_attempt_at = clock_timestamp() - interval '1 second' where state = 'queued'`);
+  await becomeService();
+  const [first] = await query(`select * from public.web_push_claim('sender-1', 5)`);
+  eq(await scalar(`select public.web_push_complete($1, 'queued', 0, 'HTTP 503 from the push service', interval '30 seconds')`, [first.id]),
+     true, 'a parked notice is requeued, not lost');
+
+  // The lease holder never came back. Its lease must not be a tombstone.
+  await becomeOwner();
+  await exec(`update public.web_push_requests set next_attempt_at = clock_timestamp() - interval '1 second'
+               where id = $1`, [first.id]);
+  await becomeService();
+  const [second] = await query(`select * from public.web_push_claim('sender-2', 5)`);
+  eq(second.id, first.id, 'the expired lease returned to the queue');
+  eq(second.attempts, 2);
+  eq(await scalar(`select claimed_by from public.web_push_requests where id = $1`, [first.id]), 'sender-2');
+
+  // Exhaust attempts and confirm the queue terminates instead of spinning.
+  await scalar(`select public.web_push_complete($1, 'queued', 0, 'still parked', interval '1 second')`, [first.id]);
+  await becomeOwner();
+  await exec(`update public.web_push_requests set attempts = max_attempts, next_attempt_at = clock_timestamp() - interval '1 second'
+               where id = $1`, [first.id]);
+  await becomeService();
+  eq((await query(`select * from public.web_push_claim('sender-3', 5)`)).length, 0);
+  await becomeOwner();
+  eq(await scalar(`select state::text from public.web_push_requests where id = $1`, [first.id]), 'failed',
+     'an exhausted notice is a failure an operator can see');
+
+  // `updated_at` is maintained by a BEFORE UPDATE trigger, so age the row with
+  // the trigger off rather than fighting it.
+  await becomeOwner();
+  await exec(`alter table public.web_push_requests disable trigger web_push_requests_touch`);
+  await exec(`update public.web_push_requests set updated_at = clock_timestamp() - interval '4 days'
+               where id = $1`, [first.id]);
+  await exec(`alter table public.web_push_requests enable trigger web_push_requests_touch`);
+  await becomeService();
+  eq(Number(await scalar(`select public.prune_web_push_requests()`)) >= 1, true, 'terminal history is pruned');
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from public.web_push_requests where id = $1`, [first.id])), 0);
+
+  // A browser nobody has re-registered for a year is not a live target.
+  await becomeOwner();
+  await exec(`update public.push_subscriptions set last_seen_at = clock_timestamp() - interval '400 days'
+               where user_id = '${U.a}'`);
+  await becomeService();
+  eq(Number(await scalar(`select public.prune_push_subscriptions()`)), 1);
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from public.push_subscriptions where user_id = '${U.a}' and disabled_at is null`)), 0);
+
+  await becomeOwner();
+  await exec(`delete from public.push_subscriptions; delete from public.web_push_requests;
+              update public.profiles set last_seen_at = clock_timestamp(), push_web = true, push_preview = true where id = '${U.a}';`);
+});
+
+// ---------------------------------------------------------------------------
+group('browser push dispatch (00018, pg_net)');
+
+/**
+ * PGlite has no pg_net, so this migration is written to apply cleanly without it
+ * and leave the 00017 behaviour untouched — the first test asserts exactly that,
+ * because a migration that only works on the hosted platform is a migration
+ * nobody can run in CI.
+ *
+ * For the rest, a stand-in `net.http_post` is installed with pg_net's real
+ * signature and the migration is re-applied: it is idempotent, and the trigger
+ * is created once `net` exists. That exercises the whole path — the Vault/GUC
+ * lookup, the request body, the bearer token, and the promise that a broken
+ * webhook can never break sending a message.
+ */
+await test('applies without pg_net and leaves 00017 behaviour intact', async () => {
+  await becomeOwner();
+  eq(await scalar(`select to_regnamespace('net') is null`), true, 'PGlite really has no pg_net');
+  eq(await scalar(`select to_regprocedure('app.web_push_dispatch_config()') is not null`), true,
+     'the configuration reader exists either way');
+  eq(await scalar(`select to_regprocedure('app.dispatch_web_push()') is not null`), true);
+  eq(await scalar(`select count(*)::int from pg_trigger where tgname = 'web_push_requests_dispatch'`), 0,
+     'no trigger is created, so nothing can reference a missing extension');
+
+  // And with nothing configured, the reader reports nothing rather than guessing.
+  eq(await scalar(`select count(*)::int from app.web_push_dispatch_config()`), 0);
+});
+
+await test('a queued notice dispatches one signed sweep and never fails the message', async () => {
+  await becomeOwner();
+  // The previous group ended by deleting every subscription; without a live one
+  // no notice is ever queued, so start from a registered browser.
+  await exec(`delete from public.push_subscriptions`);
+  await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/aziz');
+  await becomeOwner();
+  // A function with pg_net's exact signature, recording what it was handed.
+  await exec(`
+    create schema if not exists net;
+    create table if not exists net.calls (
+      id bigserial primary key, url text, body jsonb, headers jsonb, timeout_milliseconds integer
+    );
+    create or replace function net.http_post(
+      url text, body jsonb default '{}'::jsonb, params jsonb default '{}'::jsonb,
+      headers jsonb default '{}'::jsonb, timeout_milliseconds integer default 5000
+    ) returns bigint language plpgsql as $fn$
+    declare v_id bigint;
+    begin
+      insert into net.calls (url, body, headers, timeout_milliseconds)
+      values (url, body, headers, timeout_milliseconds) returning id into v_id;
+      return v_id;
+    end $fn$;
+    delete from net.calls;
+  `);
+  // Re-apply the migration now that `net` exists; it must create the trigger.
+  await exec(readFileSync(join(MIGRATIONS, '00018_web_push_dispatch.sql'), 'utf8'));
+  eq(await scalar(`select count(*)::int from pg_trigger where tgname = 'web_push_requests_dispatch'`), 1,
+     'the trigger appears once the extension surface is there');
+
+  // Incomplete configuration must not dispatch: the function rejects a sweep
+  // with no token, so firing one would be a guaranteed 401.
+  await becomeOwner();
+  await exec(`select set_config('messengerx.push_dispatch_url',
+                                'https://example.supabase.co/functions/v1/web-push-send', false)`);
+  await clearWebPush();
+  await azizAwayForPush();
+  await sendAsDilnoza('needs a token too');
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from net.calls`)), 0, 'a URL without a token dispatches nothing');
+
+  // Now configure both, and a new notice must produce exactly one request.
+  await becomeOwner();
+  await exec(`
+    select set_config('messengerx.push_dispatch_token', 'test-dispatch-token-0123456789abcdef', false);
+    delete from public.web_push_requests;
+    update public.chat_participants set unread_count = 0, muted_until = null
+     where chat_id = '${chatId}' and user_id = '${U.a}';
+  `);
+  await azizAwayForPush();
+  await sendAsDilnoza('dispatch me');
+
+  await becomeOwner();
+  const calls = await query(`select url, body, headers, timeout_milliseconds from net.calls order by id`);
+  eq(calls.length, 1, 'one HTTP request per queued notice');
+  eq(calls[0].url, 'https://example.supabase.co/functions/v1/web-push-send');
+  eq(calls[0].body.limit, 10);
+  eq(calls[0].body.wait_ms, 3000, 'the function is told to wait out the fold window before claiming');
+  eq(calls[0].headers.authorization, 'Bearer test-dispatch-token-0123456789abcdef');
+  eq(calls[0].headers['content-type'], 'application/json');
+  eq(calls[0].timeout_milliseconds, 10000);
+
+  // A burst folds into the same queued row, so it must not dispatch again.
+  await sendAsDilnoza('and another');
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from net.calls`)), 1, 'a folded follow-up does not re-dispatch');
+});
+
+await test('a failing webhook warns but never breaks the message that triggered it', async () => {
+  await becomeOwner();
+  await exec(`
+    create schema if not exists net;
+    create table if not exists net.calls (
+      id bigserial primary key, url text, body jsonb, headers jsonb, timeout_milliseconds integer
+    );
+    delete from public.push_subscriptions;
+    delete from net.calls;
+    create or replace function net.http_post(
+      url text, body jsonb default '{}'::jsonb, params jsonb default '{}'::jsonb,
+      headers jsonb default '{}'::jsonb, timeout_milliseconds integer default 5000
+    ) returns bigint language plpgsql as $fn$
+    begin
+      raise exception 'pg_net is having a bad day' using errcode = '58000';
+    end $fn$;
+  `);
+  await becomeOwner();
+  await exec(`select set_config('messengerx.push_dispatch_url',
+                                'https://example.supabase.co/functions/v1/web-push-send', false)`);
+  await subscribe(U.a, 'https://fcm.googleapis.com/fcm/send/aziz');
+  await clearWebPush();
+  await azizAwayForPush();
+  await becomeOwner();
+  await exec(`update public.chat_participants set unread_count = 0, muted_until = null
+               where chat_id = '${chatId}' and user_id = '${U.a}'`);
+
+  // The message must still be sent, and the notice must still be queued for the
+  // heartbeat sweep to find later. This is the property that makes it safe to
+  // put an HTTP call in a trigger at all.
+  await sendAsDilnoza('webhook is down');
+  eq(await webCount(U.a, 'queued'), 1, 'the notice survives a failed dispatch');
+  await becomeOwner();
+  eq(Number(await scalar(`select count(*)::int from public.messages where body = 'webhook is down'`)), 1,
+     'and the sender\'s message is unaffected');
+
+  // The alert was never sent, so claiming it now must still work.
+  await becomeOwner();
+  await exec(`update public.web_push_requests set next_attempt_at = clock_timestamp() - interval '1 second'`);
+  await becomeService();
+  const rows = await query(`select * from public.web_push_claim('sender-after-outage', 5)`);
+  eq(rows.length, 1, 'the queued notice is still claimable after the outage');
+
+  await becomeOwner();
+  await exec(`
+    delete from public.web_push_requests;
+    select set_config('messengerx.push_dispatch_url', '', false);
+    select set_config('messengerx.push_dispatch_token', '', false);
+    update public.chat_participants set unread_count = 0, muted_until = null
+     where chat_id = '${chatId}' and user_id = '${U.a}';
+    update public.profiles set last_seen_at = clock_timestamp() where id = '${U.a}';
+  `);
+});
+
+// ---------------------------------------------------------------------------
 await becomeOwner();
 const failed = results.filter((r) => !r.ok);
 let lastGroup = null;

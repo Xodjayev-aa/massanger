@@ -1,12 +1,16 @@
 # Deploy MessengerX on Vercel Hobby (site root)
 
-**Updated 25 September 2026. This file is a checklist, not a live launch.**
-`https://messengerx-uz.vercel.app/` returned Vercel's `DEPLOYMENT_NOT_FOUND`
-page when this change was written, so the name is the one to claim and the
-site is **not live**. GitHub Pages at `https://xodjayev-aa.github.io/massanger/`
-returns 404 and is no longer the deployment path. Nothing in this repository
-has been applied to a hosted Supabase project from here. Do not paste secrets
-into chat, Git, or a GitHub issue.
+**Updated 26 September 2026. This file is a checklist, not a live launch.**
+The chosen free address is `https://officialmessengerx.vercel.app`, confirmed by
+the owner. Earlier revisions of this repository hard-coded a *different* name
+(`messengerx-uz.vercel.app`) and the build script refuses to compile for any host
+it was not told about — so the owner's real project could not build at all, which
+is why that host answered HTTP 500. This revision makes
+`officialmessengerx.vercel.app` the chosen host. GitHub Pages at
+`https://xodjayev-aa.github.io/massanger/` returns 404 and is no longer the
+deployment path. Nothing in this repository has been applied to a hosted
+Supabase project from here. Do not paste secrets into chat, Git, or a GitHub
+issue.
 
 Budget stays **$0**. Use Vercel Hobby and Supabase Free. Do not add a card, do
 not pick Oracle, and do not leave a personal computer on as the worker.
@@ -20,17 +24,23 @@ install is **Add to Home Screen** (the PWA), not an App Store app.
 
 ## 0. Chosen hostname
 
-Create the Vercel project with the exact name `messengerx-uz`, so the free
-Hobby address is:
+`https://officialmessengerx.vercel.app` — the owner's Vercel project, and the
+value compiled into `INTENDED_SITE_HOST` / `INTENDED_REDIRECT_URL` in
+`apps/mobile_app/tool/web_build_config.mjs`.
 
-`https://messengerx-uz.vercel.app`
+If you ever rename the Vercel project, the web build **fails on purpose** rather
+than compiling an OAuth return URL that no longer matches:
 
-If Vercel says that name is taken, **stop and ask before choosing a different
-name**. Do not accept a random suffix, and do not set
-`MESSENGERX_ACCEPT_SITE_HOST` unless that other name was explicitly agreed.
-The web build refuses any other host on purpose.
+```
+Refusing to build for "<new-host>". The chosen free hostname is officialmessengerx.vercel.app.
+```
 
-The build compiles the OAuth return URL as `https://messengerx-uz.vercel.app/`
+That guard is deliberate — a mismatch here means sign-in silently returns to the
+wrong origin. To move to a new host, change the constants and the documentation
+together (the test suite asserts they agree), or set
+`MESSENGERX_ACCEPT_SITE_HOST` to the explicitly agreed name for a one-off build.
+
+The build compiles the OAuth return URL as `https://officialmessengerx.vercel.app/`
 (site root, no `/massanger/` path).
 
 ## 1. What you type where (do not mix these up)
@@ -39,10 +49,10 @@ The build compiles the OAuth return URL as `https://messengerx-uz.vercel.app/`
 | --- | --- | --- | --- |
 | Vercel → Environment Variables | `SUPABASE_URL` | `https://<project-ref>.supabase.co` | Not the service-role key. Not the database password. |
 | Vercel → Environment Variables | `SUPABASE_ANON_KEY` | Public **anon** JWT or **publishable** key (`sb_publishable_…`) | Not `service_role`, not `sb_secret_…`. |
-| Supabase → Authentication → URL Configuration | Site URL | `https://messengerx-uz.vercel.app` | Not the Supabase project URL. Not the old GitHub Pages URL. |
+| Supabase → Authentication → URL Configuration | Site URL | `https://officialmessengerx.vercel.app` | Not the Supabase project URL. Not the old GitHub Pages URL. |
 | Supabase → Redirect URLs | allowlist | the three Vercel entries in §4 | Not Google's callback. |
-| Supabase → Edge Function secrets | `ALLOWED_ORIGINS` | `https://messengerx-uz.vercel.app` | An **origin**: https, no path, no trailing slash, never `*`. |
-| Google Cloud → OAuth client → Authorized JavaScript origins | origin | `https://messengerx-uz.vercel.app` | No path, no trailing slash. This replaces a Pages origin if one was saved. |
+| Supabase → Edge Function secrets | `ALLOWED_ORIGINS` | `https://officialmessengerx.vercel.app` | An **origin**: https, no path, no trailing slash, never `*`. |
+| Google Cloud → OAuth client → Authorized JavaScript origins | origin | `https://officialmessengerx.vercel.app` | No path, no trailing slash. This replaces a Pages origin if one was saved. |
 | Google Cloud → OAuth client → Authorized redirect URIs | callback | `https://<project-ref>.supabase.co/auth/v1/callback` | **Leave this as Supabase.** Do not replace it with the Vercel address. |
 
 Why Google is split that way: the browser page lives on Vercel, so Google's
@@ -66,7 +76,7 @@ mistake does not get compiled into the site. Do not paste any of them here.
    If Vercel asks you to upgrade or add a card to import this public repo,
    stop. Do not pay.
 2. **Add New… → Project** and import `Xodjayev-aa/massanger`.
-3. **Project Name:** `messengerx-uz`. If the name is taken, stop and ask.
+3. **Project Name:** `officialmessengerx`. If the name is taken, stop and ask.
 4. **Framework Preset:** Other.
 5. **Root Directory:** `apps/mobile_app` (recommended). The repository root
    also works: root `vercel.json` calls the same script and publishes
@@ -94,10 +104,10 @@ mistake does not get compiled into the site. Do not paste any of them here.
 8. Deploy. Production branch must stay **`main`**. This session's branch is
    not `main`. Merging the pull request does not by itself create the Vercel
    project. After the project exists and the pull request is merged, a push
-   to `main` is what Vercel builds for `https://messengerx-uz.vercel.app`.
+   to `main` is what Vercel builds for `https://officialmessengerx.vercel.app`.
 9. Changing an environment variable does **not** change an already built
    Flutter bundle. Use **Deployments → Redeploy** after saving variables.
-10. Open `https://messengerx-uz.vercel.app/`. It is live only if you see the
+10. Open `https://officialmessengerx.vercel.app/`. It is live only if you see the
     MessengerX sign-in page, not `DEPLOYMENT_NOT_FOUND`. A build that used
     placeholder keys shows "MessengerX cannot start" instead of signing in.
     That is a failed configuration, not a launch.
@@ -113,10 +123,10 @@ After a real production deploy (not before):
 1. Reload these URLs. Each must return the app's HTML (the sign-in page or a
    loading spinner), **not** Vercel's "This page doesn't exist" / `404:
    NOT_FOUND`:
-   - `https://messengerx-uz.vercel.app/`
-   - `https://messengerx-uz.vercel.app/sign-in`
-   - `https://messengerx-uz.vercel.app/chats`
-   - `https://messengerx-uz.vercel.app/chats/00000000-0000-4000-8000-000000000000`
+   - `https://officialmessengerx.vercel.app/`
+   - `https://officialmessengerx.vercel.app/sign-in`
+   - `https://officialmessengerx.vercel.app/chats`
+   - `https://officialmessengerx.vercel.app/chats/00000000-0000-4000-8000-000000000000`
    The last URL will not open a real chat until you are signed in. It must
    still be the Flutter app. The rewrite in `vercel.json` sends unknown paths
    to `index.html` after real files (JavaScript, icons, the service worker)
@@ -133,7 +143,7 @@ After a real production deploy (not before):
    in this repo. A debug APK from CI is not a release.
 4. **Google sign-in:** only after §4 and §5, in a private window, on the
    production URL, tap **Continue with Google**. You should land back on
-   `https://messengerx-uz.vercel.app/` signed in. If Google says
+   `https://officialmessengerx.vercel.app/` signed in. If Google says
    `redirect_uri_mismatch`, you changed Google's redirect URI; put back
    `https://<project-ref>.supabase.co/auth/v1/callback`. If Supabase says the
    redirect URL is not allowed, add the three Vercel redirect entries in §4.
@@ -148,13 +158,13 @@ Supabase dashboards. Do not treat a green CI run as a live site.
 In the Supabase dashboard for **your** project (Authentication → URL
 Configuration):
 
-1. **Site URL:** `https://messengerx-uz.vercel.app`
+1. **Site URL:** `https://officialmessengerx.vercel.app`
 2. **Redirect URLs**, add each of these, then remove
    `https://xodjayev-aa.github.io/massanger/` and any `/**` variant of it if
    it is still listed:
-   - `https://messengerx-uz.vercel.app`
-   - `https://messengerx-uz.vercel.app/`
-   - `https://messengerx-uz.vercel.app/**`
+   - `https://officialmessengerx.vercel.app`
+   - `https://officialmessengerx.vercel.app/`
+   - `https://officialmessengerx.vercel.app/**`
 3. Save.
 4. Add `com.messengerx.app://login-callback` **only** after you have installed
    a native build you actually tested. There is no signed public Android
@@ -178,7 +188,7 @@ Never put it in Vercel or Flutter.
 2. Open the **OAuth 2.0 Client ID** of type **Web application** that Supabase
    uses. If you do not have one, create a Web application client. Do not
    create an Android or iOS client for this website.
-3. **Authorized JavaScript origins:** add `https://messengerx-uz.vercel.app`.
+3. **Authorized JavaScript origins:** add `https://officialmessengerx.vercel.app`.
    Remove `https://xodjayev-aa.github.io` if it is there. No path, no
    trailing slash.
 4. **Authorized redirect URIs:** keep
@@ -201,7 +211,7 @@ it in the dashboard or CLI on your machine — do not paste other secrets):
 - On your computer, after `supabase link` (see §7):
 
 ```bash
-supabase secrets set ALLOWED_ORIGINS='https://messengerx-uz.vercel.app'
+supabase secrets set ALLOWED_ORIGINS='https://officialmessengerx.vercel.app'
 ```
 
 Also set these **before** the functions are reachable, generating the values
@@ -222,7 +232,7 @@ Supabase injects `SUPABASE_URL`, `SUPABASE_ANON_KEY` and
 `SUPABASE_SERVICE_ROLE_KEY` into the function runtime. You do not copy the
 service-role key into GitHub or Vercel.
 
-`ALLOWED_ORIGINS` is the scheme and host only. `https://messengerx-uz.vercel.app/`
+`ALLOWED_ORIGINS` is the scheme and host only. `https://officialmessengerx.vercel.app/`
 with a slash will fail the production check. `https://xodjayev-aa.github.io`
 is the wrong origin for this deploy.
 
@@ -236,7 +246,7 @@ Ask before anyone else runs it. Never run `supabase db reset` or
 you set `MESSENGERX_CONFIRM_HOSTED_PUSH=yes` after reading this section.
 
 The hosted project previously had **no migrations applied**. Pushing applies
-`supabase/migrations/00001` through `00016` in order. It does not import
+`supabase/migrations/00001` through `00017` in order. It does not import
 `supabase/seed.sql`. Do not load seed data into the hosted project.
 
 1. Install the [Supabase CLI](https://supabase.com/docs/guides/cli) on your
@@ -313,6 +323,7 @@ The hosted project previously had **no migrations applied**. Pushing applies
    supabase functions deploy telegram-send
    supabase functions deploy telegram-ingest
    supabase functions deploy account-age-gate
+   supabase functions deploy web-push-send --no-verify-jwt
    ```
 
    Then in the dashboard confirm:
@@ -321,6 +332,12 @@ The hosted project previously had **no migrations applied**. Pushing applies
      JWT. The function still requires the private bridge bearer **and** HMAC.
      Never turn that application check off, and never put those credentials
      in the Flutter app.
+   - `web-push-send`: platform JWT **off** as well, because its scheduled caller (a
+     database webhook or `pg_cron`) has no session either. Both of its entry
+     points authenticate themselves: a Supabase session for a sender's tab, or
+     `WEB_PUSH_SWEEP_TOKEN` for the scheduled sweep. It is optional — with no
+     VAPID secrets it reports the feature as unconfigured and nothing else
+     changes. Setup is in [runbook §5b](runbook.md#5b-browser-notifications-0-no-worker).
 8. Set `MESSENGERX_ENV=production` if the hosted runtime does not already
    force it. The function code treats a missing value as production and
    refuses to boot without `SEAL_KEY`, `BRIDGE_TOKEN`, `BRIDGE_HMAC_SECRET`

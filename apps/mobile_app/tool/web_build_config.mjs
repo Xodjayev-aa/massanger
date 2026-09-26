@@ -10,9 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const INTENDED_SITE_HOST = 'messengerx-uz.vercel.app';
-export const INTENDED_SITE_ORIGIN = 'https://messengerx-uz.vercel.app';
-export const INTENDED_REDIRECT_URL = 'https://messengerx-uz.vercel.app/';
+export const INTENDED_SITE_HOST = 'officialmessengerx.vercel.app';
+export const INTENDED_SITE_ORIGIN = 'https://officialmessengerx.vercel.app';
+export const INTENDED_REDIRECT_URL = 'https://officialmessengerx.vercel.app/';
 export const FLUTTER_VERSION = '3.24.5';
 export const FLUTTER_COMMIT = 'dec2ee5c1f98f8e84a7d5380c05eb8a3d0a81668';
 
@@ -106,7 +106,7 @@ export function normalizeSiteRedirect(raw) {
   try {
     url = new URL(String(raw).trim());
   } catch {
-    throw new Error('The public site URL must be an absolute https URL such as https://messengerx-uz.vercel.app/');
+    throw new Error('The public site URL must be an absolute https URL such as https://officialmessengerx.vercel.app/');
   }
   if (url.username || url.password) {
     throw new Error('The public site URL must not contain credentials.');

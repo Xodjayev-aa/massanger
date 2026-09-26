@@ -50,7 +50,7 @@ file_size_limit = "20MiB"
 [auth]
 enabled = true
 # Local Docker only. The hosted Site URL is set in the Supabase dashboard to
-# https://messengerx-uz.vercel.app — see docs/vercel.md. Do not put that
+# https://officialmessengerx.vercel.app — see docs/vercel.md. Do not put that
 # production origin here, and do not point production at this localhost value
 # or at the retired GitHub Pages /massanger/ path.
 site_url = "http://localhost:5050"
@@ -105,6 +105,15 @@ enabled = true
 verify_jwt = true
 
 [functions.telegram-ingest]
+enabled = true
+verify_jwt = false
+
+# Browser push (RFC 8291/8292). The scheduled caller — a database webhook or a
+# pg_cron job — has no user session and no JWT, so the platform check is off and
+# the function authenticates both entry points itself: a Supabase session for the
+# sender's tab, or WEB_PUSH_SWEEP_TOKEN for the scheduled sweep. A deployment
+# with no VAPID secrets reports the feature as unconfigured instead of failing.
+[functions.web-push-send]
 enabled = true
 verify_jwt = false
 

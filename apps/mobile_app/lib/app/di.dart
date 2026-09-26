@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/env.dart';
 import '../data/account_repository.dart';
 import '../data/chat_repository.dart';
+import '../data/push_repository.dart';
 import '../data/telegram_repository.dart';
 import '../data/voice_service.dart';
 
@@ -28,6 +29,12 @@ void registerDependencies({required AppEnv env, required SupabaseClient client})
     )
     ..registerLazySingleton<ChatRepository>(() => ChatRepository(client))
     ..registerLazySingleton<TelegramRepository>(() => TelegramRepository(client))
+    // Browser notifications read their VAPID key from the public `web-push-send`
+    // function, so the URL comes from the same build configuration as every
+    // other function call rather than from a hard-coded host.
+    ..registerLazySingleton<PushRepository>(
+      () => PushRepository(client, pushConfigUrl: env.functionsPath('web-push-send').toString()),
+    )
     ..registerLazySingleton<VoiceService>(VoiceService.new)
     ..registerLazySingleton<VoicePlayer>(VoicePlayer.new);
 }

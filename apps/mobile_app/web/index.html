@@ -16,6 +16,10 @@
   <title>MessengerX</title>
 </head>
 <body>
+  <!-- Browser-notification bridge. Loaded before Flutter so the Dart side can
+       always assume window.MessengerXPush exists. It registers no service
+       worker and asks for no permission until the user turns notifications on. -->
+  <script src="push/push-client.js" defer></script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
