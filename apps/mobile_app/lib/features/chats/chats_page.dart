@@ -107,17 +107,37 @@ class _TelegramActionState extends State<_TelegramAction> {
     }
   }
 
+  String get _tooltip {
+    return switch (_authState) {
+      'linked' => 'Telegram — linked',
+      'syncing' => 'Telegram — syncing',
+      'needs_reauth' => 'Telegram — sign in again',
+      'revoked' => 'Telegram — disconnected',
+      'failed' => 'Telegram — bridge error',
+      'unlinked' => 'Telegram — not linked',
+      null => 'Telegram',
+      _ => 'Telegram — ${_authState!}',
+    };
+  }
+
+  bool get _needsAttention {
+    final state = _authState;
+    if (state == null) return false;
+    return state != 'linked' && state != 'unlinked';
+  }
+
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      tooltip: 'Telegram',
+      tooltip: _tooltip,
       onPressed: () async {
         await context.push(Routes.telegram);
         if (context.mounted) await _refresh();
       },
       icon: Badge(
-        isLabelVisible: _authState != null && _authState != 'linked' && _authState != 'unlinked',
+        isLabelVisible: _needsAttention,
         label: const Text('!'),
+        backgroundColor: Theme.of(context).colorScheme.error,
         child: TelegramBadge(authState: _authState, compact: true),
       ),
     );
@@ -149,10 +169,14 @@ class ChatTile extends StatelessWidget {
           Expanded(
             child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
           ),
-          if (chat.isTelegramMirror) const Padding(
-            padding: EdgeInsets.only(left: 6),
-            child: TelegramBadge(compact: true),
-          ),
+          if (chat.isTelegramMirror)
+            const Padding(
+              padding: EdgeInsets.only(left: 6),
+              child: Tooltip(
+                message: 'Telegram',
+                child: TelegramBadge(compact: true),
+              ),
+            ),
           const SizedBox(width: 6),
           Text(
             chat.lastMessageAt == null ? '' : ChatFormatting.listStamp(chat.lastMessageAt!),

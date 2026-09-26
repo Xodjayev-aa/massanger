@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -42,6 +43,7 @@ class ComposerState extends State<Composer> {
   void initState() {
     super.initState();
     _focus.addListener(_onFocusChange);
+    _text.addListener(_onTextListener);
   }
 
   @override
@@ -49,6 +51,7 @@ class ComposerState extends State<Composer> {
     _typingStop?.cancel();
     _recordTicker?.cancel();
     _focus.removeListener(_onFocusChange);
+    _text.removeListener(_onTextListener);
     _focus.dispose();
     _text.dispose();
     unawaited(_voices.cancel());
@@ -57,6 +60,13 @@ class ComposerState extends State<Composer> {
 
   void _onFocusChange() {
     if (!_focus.hasFocus) widget.bloc.notifyTyping(on: false);
+  }
+
+  void _onTextListener() {
+    // Rebuild so the mic ↔ send button swap happens immediately when the
+    // user types or clears the field. The typing notifier itself is handled
+    // in _onTextChanged to avoid double timers.
+    if (mounted) setState(() {});
   }
 
   bool get _canSend => _text.text.trim().isNotEmpty && !widget.bloc.state.sending;
@@ -76,12 +86,17 @@ class ComposerState extends State<Composer> {
   }
 
   void _send() {
+    if (!_canSend) return;
     final text = _text.text.trim();
     if (text.isEmpty) return;
     _text.clear();
     _typingStop?.cancel();
+    _typingStop = null;
     widget.bloc.notifyTyping(on: false);
     widget.bloc.add(ChatTextSent(text));
+    // Keep focus in the composer after send so Enter can be pressed again
+    // without an extra tap, especially on web/desktop.
+    _focus.requestFocus();
   }
 
   Future<void> _pickImage() async {
@@ -235,60 +250,72 @@ class ComposerState extends State<Composer> {
 
   Widget _inputRow(BuildContext context) {
     final replyTo = widget.bloc.state.replyTo;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: <Widget>[
-        IconButton(
-          tooltip: 'Attach a photo',
-          onPressed: _pickImage,
-          icon: const Icon(Icons.attach_file_rounded),
-        ),
-        Expanded(
-          child: TextField(
-            controller: _text,
-            focusNode: _focus,
-            minLines: 1,
-            maxLines: 6,
-            textCapitalization: TextCapitalization.sentences,
-            onChanged: _onTextChanged,
-            onSubmitted: (_) => _send(),
-            decoration: InputDecoration(
-              hintText: replyTo == null ? 'Message' : 'Reply to ${replyTo.senderName}',
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    // Enter-to-send on web: maxLines:6 makes the field multiline, so the
+    // browser inserts a newline and onSubmitted never fires. Wrap the row in
+    // CallbackShortcuts with plain Enter / NumpadEnter bound to _send.
+    // Shift+Enter is left unbound so it still inserts a newline.
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.enter): _send,
+        const SingleActivator(LogicalKeyboardKey.numpadEnter): _send,
+      },
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: <Widget>[
+          IconButton(
+            tooltip: 'Attach a photo',
+            onPressed: _pickImage,
+            icon: const Icon(Icons.attach_file_rounded),
+          ),
+          Expanded(
+            child: TextField(
+              controller: _text,
+              focusNode: _focus,
+              minLines: 1,
+              maxLines: 6,
+              textCapitalization: TextCapitalization.sentences,
+              textInputAction: TextInputAction.send,
+              onChanged: _onTextChanged,
+              onSubmitted: (_) => _send(),
+              decoration: InputDecoration(
+                hintText: replyTo == null ? 'Message' : 'Reply to ${replyTo.senderName}',
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 4),
-        BlocBuilder<ChatBloc, ChatState>(
-          buildWhen: (previous, next) => previous.sending != next.sending || previous.messages.length != next.messages.length,
-          builder: (context, state) {
-            final hasText = _text.text.trim().isNotEmpty;
-            if (hasText) {
-              return IconButton.filled(
-                // `_canSend` is the one rule: nothing typed, or a send already in
-                // flight for this thread.
-                onPressed: _canSend ? _send : null,
-                icon: state.sending
-                    ? const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.arrow_upward_rounded),
+          const SizedBox(width: 4),
+          BlocBuilder<ChatBloc, ChatState>(
+            buildWhen: (previous, next) => previous.sending != next.sending,
+            builder: (context, state) {
+              final hasText = _text.text.trim().isNotEmpty;
+              if (hasText) {
+                return IconButton.filled(
+                  tooltip: 'Send message (Enter)',
+                  // `_canSend` is the one rule: nothing typed, or a send already in
+                  // flight for this thread.
+                  onPressed: _canSend ? _send : null,
+                  icon: state.sending
+                      ? const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.arrow_upward_rounded),
+                );
+              }
+              // The mic owns the long press: press-and-hold records, release sends,
+              // and sliding left discards.
+              return GestureDetector(
+                onLongPressStart: (_) => _startRecording(),
+                onLongPressMoveUpdate: (details) => setState(() => _cancelling = details.offsetFromOrigin.dx < -60),
+                onLongPressEnd: (_) => _finishRecording(),
+                onLongPressCancel: _cancelRecording,
+                child: IconButton(
+                  tooltip: 'Hold to record a voice note',
+                  onPressed: () => _show('Hold the microphone to record.'),
+                  icon: const Icon(Icons.mic_rounded),
+                ),
               );
-            }
-            // The mic owns the long press: press-and-hold records, release sends,
-            // and sliding left discards.
-            return GestureDetector(
-              onLongPressStart: (_) => _startRecording(),
-              onLongPressMoveUpdate: (details) => setState(() => _cancelling = details.offsetFromOrigin.dx < -60),
-              onLongPressEnd: (_) => _finishRecording(),
-              onLongPressCancel: _cancelRecording,
-              child: IconButton(
-                tooltip: 'Hold to record a voice note',
-                onPressed: () => _show('Hold the microphone to record.'),
-                icon: const Icon(Icons.mic_rounded),
-              ),
-            );
-          },
-        ),
-      ],
+            },
+          ),
+        ],
+      ),
     );
   }
 
