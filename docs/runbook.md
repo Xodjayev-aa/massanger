@@ -203,7 +203,7 @@ the user has not allowed.
    verify, and rotating it invalidates every existing subscription:
 
    ```bash
-   npx --yes web-push-send generate-vapid-keys --json
+   npx --yes web-push generate-vapid-keys --json
    ```
 
 3. **Set the function secrets** (dashboard or CLI; never in a Git commit):
