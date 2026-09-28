@@ -2112,6 +2112,190 @@ await test('a failing webhook warns but never breaks the message that triggered 
 });
 
 // ---------------------------------------------------------------------------
+group('video messages & shorts (00019)');
+let shortId = null;
+
+const videoMedia = (over = {}) => JSON.stringify({
+  store: 'b2',
+  key: `chat/${chatId}/app/1700000000_ab12cd34.mp4`,
+  mime: 'video/mp4',
+  duration_ms: 15000,
+  size_bytes: 52428800,
+  ...over,
+});
+
+await test('a video message passes the extended media contract and the shape check', async () => {
+  await become(U.a);
+  const [row] = await rpc(
+    'public.send_message',
+    `'${chatId}', 'video', null, '${videoMedia()}', null, 'cccccccc-cccc-cccc-cccc-cccccccccccc'`
+  );
+  eq(row.kind, 'video', 'row stored with the new kind');
+  const s = await one(`select preview_body, preview_kind from public.chat_summaries(null, 10)`);
+  eq(s.preview_kind, 'video', 'preview carries the raw kind');
+  eq(s.preview_body, 'Video', 'a caption-less video previews as Video, not as an empty line');
+});
+
+await test('video media that violates the hard caps is rejected with 22023', async () => {
+  await become(U.a);
+  const cases = [
+    [`{"bucket":"images","store":"b2","key":"chat/${chatId}/a.mp4","mime":"video/mp4","duration_ms":1000,"size_bytes":1}`, /Supabase storage bucket/],
+    [videoMedia({ mime: 'video/webm' }), /video\/mp4/],
+    [videoMedia({ duration_ms: 60001 }), /60000/],
+    [videoMedia({ size_bytes: 262144001 }), /262144000/],
+    [videoMedia({ store: 'drive' }), /store/],
+    [videoMedia({ key: '' }), /object key/],
+    [videoMedia({ key: '../escape.mp4' }), /relative object path/],
+    [videoMedia({ duration_ms: 0 }), /positive duration_ms/],
+    [videoMedia({ size_bytes: 0 }), /positive size_bytes/],
+  ];
+  for (const [media, pattern] of cases) {
+    await throws(
+      () => rpc('public.send_message', `'${chatId}', 'video', null, '${media}', null, null`),
+      pattern
+    );
+  }
+});
+
+await test('video rows require both a sender and media (messages_shape forward arm)', async () => {
+  await becomeService();
+  await throws(
+    () => exec(`
+      insert into public.messages (chat_id, kind, media, source, state)
+      values ('${chatId}', 'video', null, 'app', 'pending')`),
+    /media is required/
+  );
+  await throws(
+    () => exec(`
+      insert into public.messages (chat_id, kind, media, source, state)
+      values ('${chatId}', 'video',
+              '{"store":"b2","key":"chat/${chatId}/x.mp4","mime":"video/mp4","duration_ms":1000,"size_bytes":1000}'::jsonb,
+              'app', 'pending')`),
+    /messages_shape|violates check constraint/
+  );
+});
+
+await test('video is never enqueued to the Telegram outbox', async () => {
+  await becomeService();
+  await exec(`
+    update public.telegram_accounts set auth_state = 'linked', tg_user_id = 100,
+           sync_direction = 'both', linked_at = clock_timestamp() where user_id = '${U.a}';
+    insert into public.telegram_chats (owner_user_id, tg_chat_id, tg_chat_type, chat_id, peer_user_id)
+    values ('${U.a}', 5001337420, 'private', '${chatId}', 9999)
+    on conflict (owner_user_id, tg_chat_id) do update set chat_id = excluded.chat_id;
+  `);
+  await become(U.a);
+  const before = Number(await scalar(`select count(*)::int from public.telegram_outbox`));
+  await rpc('public.send_message', `'${chatId}', 'text', 'control for outbox', null, null, null`);
+  const afterText = Number(await scalar(`select count(*)::int from public.telegram_outbox`));
+  eq(afterText, before + 1, 'control: a text message still enqueues');
+  await rpc(
+    'public.send_message',
+    `'${chatId}', 'video', null, '${videoMedia({ key: `chat/${chatId}/app/1700000009_ff00ee11.mp4` })}', null, null`
+  );
+  eq(
+    Number(await scalar(`select count(*)::int from public.telegram_outbox`)),
+    afterText,
+    'a video message does not: Telegram would only ever receive an expired link'
+  );
+});
+
+await test('shorts: author writes, the feed reads, likes move the counter server-side', async () => {
+  const key = `shorts/${U.a}/app/1700000002_aa11bb22.mp4`;
+  await become(U.a);
+  await exec(`
+    insert into public.shorts (author_id, object_key, duration_ms, size_bytes, caption)
+    values ('${U.a}', '${key}', 12000, 9000000, 'first clip')`);
+  const s = await one(`select id, like_count from public.shorts where object_key = $1`, [key]);
+  shortId = s.id;
+  eq(s.like_count, 0);
+
+  await become(U.b);
+  eq(Number(await scalar(`select count(*)::int from public.shorts`)), 1, 'the feed is visible to any signed-in user');
+  await exec(`insert into public.short_likes (short_id, user_id) values ('${shortId}', '${U.b}')`);
+  eq(Number(await scalar(`select like_count from public.shorts where id = $1`, [shortId])), 1, 'trigger counted the like');
+  await throws(
+    () => exec(`insert into public.short_likes (short_id, user_id) values ('${shortId}', '${U.b}')`),
+    /duplicate key/
+  );
+  await exec(`delete from public.short_likes where short_id = '${shortId}' and user_id = '${U.b}'`);
+  eq(Number(await scalar(`select like_count from public.shorts where id = $1`, [shortId])), 0, 'and the unlike');
+});
+
+await test('shorts: authorship and like_count are server-managed', async () => {
+  await become(U.b);
+  eq((await query(`update public.shorts set caption = 'hijacked' where id = '${shortId}' returning id`)).length,
+     0, 'a stranger cannot rewrite the caption');
+  await throws(
+    () => exec(`update public.shorts set like_count = 999 where id = '${shortId}'`),
+    /permission denied/,
+    'no column grant on like_count: the counter is trigger territory'
+  );
+  eq((await query(`delete from public.shorts where id = '${shortId}' returning id`)).length,
+     0, 'a stranger cannot delete the short');
+  await become(U.a);
+  eq((await query(`update public.shorts set caption = 'edited' where id = '${shortId}' returning id`)).length,
+     1, 'the author edits the caption');
+});
+
+await test('shorts: shape checks, authorship and the eligibility gate hold', async () => {
+  await become(U.a);
+  await throws(
+    () => exec(`insert into public.shorts (author_id, object_key, duration_ms, size_bytes)
+                values ('${U.a}', 'shorts/${U.a}/x.mp4', 61000, 1000)`),
+    /duration_ms/
+  );
+  await throws(
+    () => exec(`insert into public.shorts (author_id, object_key, duration_ms, size_bytes)
+                values ('${U.a}', 'shorts/${U.a}/x.mp4', 1000, 262144001)`),
+    /size_bytes/
+  );
+  await throws(
+    () => exec(`insert into public.shorts (author_id, object_key, duration_ms, size_bytes)
+                values ('${U.a}', '/absolute.mp4', 1000, 1000)`),
+    /object_key|violates check constraint/
+  );
+  await throws(
+    () => exec(`insert into public.shorts (author_id, object_key, duration_ms, size_bytes)
+                values ('${U.b}', 'shorts/${U.b}/x.mp4', 1000, 1000)`),
+    /row-level security/
+  );
+  await becomeService();
+  await exec(`update public.profiles set access_state = 'restricted', access_state_reason = 'moderation'
+              where id = '${U.other}'`);
+  await become(U.other);
+  await throws(
+    () => exec(`insert into public.shorts (author_id, object_key, duration_ms, size_bytes)
+                values ('${U.other}', 'shorts/${U.other}/x.mp4', 1000, 1000)`),
+    /row-level security/
+  );
+  await becomeService();
+  await exec(`update public.profiles set access_state = 'active', access_state_reason = null where id = '${U.other}'`);
+});
+
+await test('shorts: likes are visible to their owner only, anon sees nothing', async () => {
+  await become(U.b);
+  await exec(`insert into public.short_likes (short_id, user_id) values ('${shortId}', '${U.b}')`);
+  eq((await query(`select short_id from public.short_likes where user_id = '${U.b}'`)).length, 1, 'owner sees their like');
+  await become(U.a);
+  eq((await query(`select short_id from public.short_likes where user_id = '${U.b}'`)).length, 0,
+     'another user cannot enumerate who liked what');
+  await exec(`reset role`);
+  await pg.query(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify({ role: 'anon' })]);
+  await exec(`set role anon`);
+  await throws(() => exec(`select count(*) from public.shorts`), /permission denied/);
+  await exec(`reset role`);
+  await pg.query(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify({})]);
+});
+
+await test('deleting a short cascades its likes and clears the feed', async () => {
+  await become(U.a);
+  await exec(`delete from public.shorts where id = '${shortId}'`);
+  eq(Number(await scalar(`select count(*)::int from public.shorts`)), 0, 'row gone');
+  eq(Number(await scalar(`select count(*)::int from public.short_likes`)), 0, 'likes cascaded');
+});
+
+// ---------------------------------------------------------------------------
 await becomeOwner();
 const failed = results.filter((r) => !r.ok);
 let lastGroup = null;

@@ -125,3 +125,52 @@ describe('browser push configuration', () => {
     assert.throws(readEnv, /WEB_PUSH_ENDPOINT_HOSTS/);
   });
 });
+
+describe('video storage configuration', () => {
+  const video = {
+    VIDEO_S3_ENDPOINT: 'https://s3.us-west-000.backblazeb2.com',
+    VIDEO_S3_REGION: 'us-west-000',
+    VIDEO_S3_ACCESS_KEY_ID: '00221133445566778899aabbccddeeff',
+    VIDEO_S3_SECRET_ACCESS_KEY: 'K001234567890abcdefghijklmnopqrstuvwxyzEXAMPLEKEY',
+    VIDEO_BUCKET: 'messengerx-video',
+  };
+
+  it('is optional: an unconfigured deployment reports nulls instead of failing', () => {
+    current = production;
+    const env = readEnv();
+    assert.equal(env.videoS3Endpoint, null);
+    assert.equal(env.videoBucket, null);
+  });
+
+  it('accepts a complete B2 S3 configuration', () => {
+    current = { ...production, ...video };
+    const env = readEnv();
+    assert.equal(env.videoS3Endpoint, video.VIDEO_S3_ENDPOINT);
+    assert.equal(env.videoS3Region, 'us-west-000');
+    assert.equal(env.videoBucket, 'messengerx-video');
+  });
+
+  it('refuses half a configuration rather than a half-working upload flow', () => {
+    for (const missing of Object.keys(video)) {
+      current = { ...production, ...video, [missing]: undefined };
+      assert.throws(readEnv, /must be set together/, `${missing} alone should fail`);
+    }
+    current = { ...production, MESSENGERX_ENV: 'development', VIDEO_BUCKET: 'messengerx-video' };
+    assert.throws(readEnv, /must be set together/);
+  });
+
+  it('refuses a non-https endpoint, a path-ful endpoint or a bad bucket name', () => {
+    for (const endpoint of ['http://s3.us-west-000.backblazeb2.com', 'https://s3.example.com/prefix', 'not a url', 'https://s3.example.com/?x=1']) {
+      current = { ...production, ...video, VIDEO_S3_ENDPOINT: endpoint };
+      assert.throws(readEnv, /VIDEO_S3_ENDPOINT/, `"${endpoint}" should fail`);
+    }
+    for (const bucket of ['', 'UPPER', '-leading', 'has_underscore', 'x']) {
+      current = { ...production, ...video, VIDEO_BUCKET: bucket };
+      assert.throws(readEnv, /VIDEO_BUCKET|must be set together/, `"${bucket}" should fail`);
+    }
+    for (const region of ['us west 000', 'US', '']) {
+      current = { ...production, ...video, VIDEO_S3_REGION: region };
+      assert.throws(readEnv, /VIDEO_S3_REGION|must be set together/, `"${region}" should fail`);
+    }
+  });
+});

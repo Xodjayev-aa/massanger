@@ -6,7 +6,7 @@
  * layer maps to a typed failure (see apps/mobile/lib/core/errors).
  */
 
-export type MessageKind = 'text' | 'image' | 'voice' | 'system';
+export type MessageKind = 'text' | 'image' | 'voice' | 'video' | 'system';
 export type DeliveryState = 'sending' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
 export type AccessState =
   | 'pending_verification'
