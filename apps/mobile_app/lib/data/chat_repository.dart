@@ -184,8 +184,11 @@ class ChatRepository {
   Future<List<DirectoryEntry>> searchPeople(String query) async {
     // PostgREST's `or=` grammar is comma-separated, so a name containing a comma
     // or parenthesis would otherwise become a syntax error (400) instead of a
-    // result set. User-visible search must never fail on punctuation.
-    final trimmed = query.trim().replaceAll(RegExp(r'[,()]'), ' ').trim();
+    // result set. User-visible search must never fail on punctuation. The hint
+    // says `@username`, but the column stores the bare handle: drop the sigil
+    // after the scrub, so `(@alice)` and `@alice` both search `alice`.
+    final scrubbed = query.trim().replaceAll(RegExp(r'[,()]'), ' ').trim();
+    final trimmed = scrubbed.replaceFirst(RegExp(r'^@+'), '').trim();
     if (trimmed.length < 2) return const <DirectoryEntry>[];
     try {
       final rows = await _client
