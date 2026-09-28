@@ -54,7 +54,8 @@ keys or seed data to production.
    password, legacy service-role/secret key and JWT signing material private.
    Use the Supabase CLI authenticated **on your own trusted machine** to link
    the project: `supabase link --project-ref <your-project-ref>`, then
-   `supabase db push`. This applies migrations `00001` through `00017`; do **not**
+   `supabase db push`. This applies every migration in `supabase/migrations/`
+   (currently `00001` through `00018`); do **not**
    run `supabase db reset` on production (it drops data), and do not import
    `supabase/seed.sql` into live users' data. Check every migration result and
    inspect RLS, grants, Storage buckets and Realtime publication in Dashboard.
@@ -203,7 +204,7 @@ the user has not allowed.
    verify, and rotating it invalidates every existing subscription:
 
    ```bash
-   npx --yes web-push-send generate-vapid-keys --json
+   npx --yes web-push generate-vapid-keys --json
    ```
 
 3. **Set the function secrets** (dashboard or CLI; never in a Git commit):
