@@ -22,6 +22,11 @@ class ChatsPage extends StatelessWidget {
         title: const Text('MessengerX'),
         actions: <Widget>[
           IconButton(
+            tooltip: 'Shorts',
+            icon: const Icon(Icons.smart_display_outlined),
+            onPressed: () => context.push(Routes.shorts),
+          ),
+          IconButton(
             tooltip: 'Search',
             icon: const Icon(Icons.search_rounded),
             onPressed: () => context.push(Routes.search),

@@ -8,10 +8,11 @@ import 'package:image_picker/image_picker.dart';
 import '../../app/di.dart';
 import '../../core/errors.dart';
 import '../../data/models.dart';
+import '../../data/video_repository.dart';
 import '../../data/voice_service.dart';
 import 'chat_bloc.dart';
 
-/// The message input: text, photo, and a hold-to-record voice note.
+/// The message input: text, photo, video clip, and a hold-to-record voice note.
 ///
 /// Recording is a long-press because that is the gesture that carries intent — a tap
 /// would send a 0.2 s clip. Sliding the finger off the button cancels, and the level
@@ -39,11 +40,24 @@ class ComposerState extends State<Composer> {
   Duration _recorded = Duration.zero;
   String? _error;
 
+  /// The video affordance only exists on deployments whose operator actually
+  /// wired B2 secrets into `video-ticket` — `status` decides, and a deployment
+  /// that answers "not configured" (or does not answer at all) simply shows no
+  /// camera button rather than one that can only fail.
+  bool _videoEnabled = false;
+
   @override
   void initState() {
     super.initState();
     _focus.addListener(_onFocusChange);
     _text.addListener(_onTextListener);
+    _probeVideoCapability();
+  }
+
+  Future<void> _probeVideoCapability() async {
+    final configured = await sl<VideoRepository>().isConfigured();
+    if (!mounted) return;
+    setState(() => _videoEnabled = configured);
   }
 
   @override
@@ -119,6 +133,27 @@ class ComposerState extends State<Composer> {
       _show(error.message);
     } catch (error) {
       _show('That image could not be read.');
+    }
+  }
+
+  Future<void> _pickVideo() async {
+    try {
+      final picked = await ImagePicker().pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(seconds: 60),
+      );
+      if (picked == null) return;
+      if (!mounted) return;
+      // Same one-question flow as a photo: the caption is the message body.
+      final caption = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => _CaptionDialog(fileName: picked.name),
+      );
+      widget.bloc.add(ChatVideoSent(picked, caption: caption));
+    } on AppException catch (error) {
+      _show(error.message);
+    } catch (_) {
+      _show('That video could not be read.');
     }
   }
 
@@ -267,6 +302,12 @@ class ComposerState extends State<Composer> {
             onPressed: _pickImage,
             icon: const Icon(Icons.attach_file_rounded),
           ),
+          if (_videoEnabled)
+            IconButton(
+              tooltip: 'Send a video (up to 60 s, MP4)',
+              onPressed: _pickVideo,
+              icon: const Icon(Icons.videocam_outlined),
+            ),
           Expanded(
             child: TextField(
               controller: _text,

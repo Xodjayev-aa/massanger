@@ -41,6 +41,13 @@ class ChatImageSent extends ChatEvent {
   final String? caption;
 }
 
+class ChatVideoSent extends ChatEvent {
+  const ChatVideoSent(this.file, {this.caption});
+
+  final XFile file;
+  final String? caption;
+}
+
 class ChatVoiceSent extends ChatEvent {
   const ChatVoiceSent(this.take);
 
@@ -160,6 +167,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatOlderRequested>(_onOlder);
     on<ChatTextSent>(_onText);
     on<ChatImageSent>(_onImage);
+    on<ChatVideoSent>(_onVideo);
     on<ChatVoiceSent>(_onVoice);
     on<ChatReplyChosen>((event, emit) => emit(state.copyWith(replyTo: () => event.message)));
     on<ChatRetryRequested>(_onRetry);
@@ -287,6 +295,29 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       final optimistic = MessageItem.local(
         chatId: state.chatId,
         kind: MessageKind.image,
+        clientMessageId: clientId,
+        senderName: _myName,
+        body: event.caption,
+        media: media,
+      );
+      emit(state.copyWith(messages: <MessageItem>[...state.messages, optimistic], sending: true));
+      await _deliver(optimistic, emit, mediaMap: media.toMap());
+    } catch (error) {
+      emit(state.copyWith(sending: false, error: error));
+    }
+  }
+
+  /// Same shape as [_onImage] — upload first, then deliver — because a video
+  /// bubble without a confirmed B2 object would be a message the validator
+  /// rejects. The upload runs inside the optimistic window so the progress the
+  /// user sees covers ticket + PUT + confirm, not just the insert.
+  Future<void> _onVideo(ChatVideoSent event, Emitter<ChatState> emit) async {
+    final clientId = _uuid.v4();
+    try {
+      final media = await _repository.uploadVideo(chatId: state.chatId, file: event.file);
+      final optimistic = MessageItem.local(
+        chatId: state.chatId,
+        kind: MessageKind.video,
         clientMessageId: clientId,
         senderName: _myName,
         body: event.caption,

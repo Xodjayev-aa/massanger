@@ -5,7 +5,9 @@ import '../core/env.dart';
 import '../data/account_repository.dart';
 import '../data/chat_repository.dart';
 import '../data/push_repository.dart';
+import '../data/shorts_repository.dart';
 import '../data/telegram_repository.dart';
+import '../data/video_repository.dart';
 import '../data/voice_service.dart';
 
 /// Composition root.
@@ -27,7 +29,12 @@ void registerDependencies({required AppEnv env, required SupabaseClient client})
         webRedirectUrl: env.webRedirectUrl,
       ),
     )
-    ..registerLazySingleton<ChatRepository>(() => ChatRepository(client))
+    // The B2 ticket office is shared: the chat upload path, the bubble's
+    // signed-URL cache and the shorts publisher all speak to `video-ticket`
+    // through this one instance.
+    ..registerLazySingleton<VideoRepository>(() => VideoRepository(client))
+    ..registerLazySingleton<ChatRepository>(() => ChatRepository(client, videos: sl<VideoRepository>()))
+    ..registerLazySingleton<ShortsRepository>(() => ShortsRepository(client, sl<VideoRepository>()))
     ..registerLazySingleton<TelegramRepository>(() => TelegramRepository(client))
     // Browser notifications read their VAPID key from the public `web-push-send`
     // function, so the URL comes from the same build configuration as every

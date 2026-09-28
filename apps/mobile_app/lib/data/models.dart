@@ -7,6 +7,7 @@ enum MessageKind {
   text,
   image,
   voice,
+  video,
   system;
 
   static MessageKind parse(Object? value) => MessageKind.values.firstWhere(
@@ -81,6 +82,7 @@ sealed class MessageMedia {
     return switch (map['kind']) {
       'voice' => VoiceMedia.fromMap(map),
       'image' => ImageMedia.fromMap(map),
+      'video' => VideoMedia.fromMap(map),
       _ => map['duration_ms'] != null ? VoiceMedia.fromMap(map) : ImageMedia.fromMap(map),
     };
   }
@@ -187,6 +189,50 @@ final class VoiceMedia extends MessageMedia {
         'size_bytes': sizeBytes,
         if (waveform.length == Waveform.buckets) 'waveform': waveform,
         if (transcript != null && transcript!.isNotEmpty) 'text_transcript': transcript,
+      };
+}
+
+/// A video clip stored in Backblaze B2 — the first attachment that is *not* in
+/// a Supabase bucket (`validate_message_media` refuses one). The pair that
+/// travels through `messages.media` is `store: 'b2'` + the object `key`;
+/// `video-ticket` mints and verifies both halves of the transfer.
+final class VideoMedia extends MessageMedia {
+  const VideoMedia({
+    required this.key,
+    this.mime = 'video/mp4',
+    this.duration = Duration.zero,
+    this.sizeBytes = 0,
+  });
+
+  /// B2 object key: `chat/<chatId>/app/<name>.mp4` or `shorts/<uid>/app/…`.
+  final String key;
+  final String mime;
+  final Duration duration;
+  final int sizeBytes;
+
+  /// Never a Supabase storage bucket — the bucket check in the validator would
+  /// reject the map, and the B2 endpoint is configured in `video-ticket`.
+  @override
+  String? get bucket => null;
+
+  @override
+  String get storagePath => key;
+
+  factory VideoMedia.fromMap(Map<String, dynamic> map) => VideoMedia(
+        key: asString(map['key']),
+        mime: asString(map['mime'], fallback: 'video/mp4'),
+        duration: Duration(milliseconds: asInt(map['duration_ms'])),
+        sizeBytes: asInt(map['size_bytes']),
+      );
+
+  @override
+  Map<String, Object?> toMap() => {
+        'kind': 'video',
+        'store': 'b2',
+        'key': key,
+        'mime': mime,
+        'duration_ms': duration.inMilliseconds,
+        'size_bytes': sizeBytes,
       };
 }
 
@@ -369,6 +415,13 @@ final class MessageItem {
         final attached = media;
         if (attached is VoiceMedia) return 'Voice note (${ChatFormatting.duration(attached.duration)})';
         return 'Voice note';
+      case MessageKind.video:
+        final attached = media;
+        final label = attached is VideoMedia
+            ? 'Video (${ChatFormatting.duration(attached.duration)})'
+            : 'Video';
+        final caption = body;
+        return caption == null || caption.isEmpty ? label : '$label: $caption';
       case MessageKind.system:
         return body ?? '';
       case MessageKind.text:

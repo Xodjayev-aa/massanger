@@ -7,7 +7,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/errors.dart';
 import '../core/formatting.dart';
+import '../core/video_limits.dart';
 import 'models.dart';
+import 'video_repository.dart';
 
 /// Everything the chat screens need from the backend.
 ///
@@ -17,9 +19,13 @@ import 'models.dart';
 /// Writes go through `send_message` so the optimistic bubble and the server row
 /// share a `client_message_id`, which is what makes deduplication work.
 class ChatRepository {
-  ChatRepository(this._client);
+  ChatRepository(this._client, {VideoRepository? videos}) : _videos = videos ?? VideoRepository(_client);
 
   final SupabaseClient _client;
+
+  /// B2 ticket office. Shared through DI so the bubble's signed-URL cache and
+  /// the upload path agree on one instance.
+  final VideoRepository _videos;
 
   static const int feedPageSize = 30;
 
@@ -270,9 +276,50 @@ class ChatRepository {
     }
   }
 
+  /// Uploads a picked clip through the three-step B2 flow: ticket → direct
+  /// upload → confirm. What comes back is [VideoMedia] built from the
+  /// *server-verified* size and duration, which is what `send_message` will
+  /// then re-validate in `app.validate_message_media`.
+  Future<VideoMedia> uploadVideo({
+    required String chatId,
+    required XFile file,
+  }) async {
+    final bytes = await file.readAsBytes();
+    // Same limits the edge function and the SQL validator enforce — failing
+    // here costs a snackbar, failing there would cost a wasted upload.
+    final duration = VideoLimits.preflight(file.name, bytes);
+    final ticket = await _videos.requestUpload(
+      scope: VideoScope.chat,
+      chatId: chatId,
+      sizeBytes: bytes.length,
+      duration: duration,
+    );
+    await VideoRepository.putBytes(url: ticket.url, bytes: bytes, contentType: ticket.contentType);
+    final verified = await _videos.confirm(scope: VideoScope.chat, chatId: chatId, key: ticket.key);
+    return VideoMedia(
+      key: verified.key,
+      mime: VideoLimits.mime,
+      duration: verified.duration,
+      sizeBytes: verified.sizeBytes,
+    );
+  }
+
   Future<void> deleteUploaded(MessageMedia? media) async {
     final attached = media;
     if (attached == null || attached.isExternal) return;
+    if (attached is VideoMedia) {
+      try {
+        await _videos.discard(
+          scope: VideoScope.fromKey(attached.key),
+          chatId: VideoScope.chatIdFromKey(attached.key),
+          key: attached.key,
+        );
+      } catch (_) {
+        // An orphaned object is a billing detail, not a user-visible failure;
+        // the runbook's B2 sweep reclaims these, exactly like a chat photo.
+      }
+      return;
+    }
     final bucket = attached.bucket;
     final path = attached.storagePath;
     if (bucket == null || path == null) return;
@@ -293,6 +340,22 @@ class ChatRepository {
   Future<String?> urlFor(MessageMedia? media) async {
     final attached = media;
     if (attached == null) return null;
+    if (attached is VideoMedia) {
+      // B2 has no `createSignedUrl` here: the ticket function mints the GET
+      // after re-checking membership, and the cache is the same one the photo
+      // path uses — a thread re-render must not re-sign on every frame.
+      final cached = _urls[attached.key];
+      if (cached != null && cached.expires.isAfter(DateTime.now().add(const Duration(minutes: 2)))) {
+        return cached.url;
+      }
+      try {
+        final url = await _videos.playbackUrl(key: attached.key);
+        _urls[attached.key] = _SignedUrl(url, DateTime.now().add(const Duration(minutes: 50)));
+        return url;
+      } catch (_) {
+        return null;
+      }
+    }
     if (!attached.isExternal) {
       final bucket = attached.bucket;
       final path = attached.storagePath;
