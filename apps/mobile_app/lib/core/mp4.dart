@@ -1,5 +1,15 @@
 import 'dart:typed_data';
 
+/// Largest 64-bit box size the walk will honour.
+///
+/// mp4's `size == 1` escape hatch stores a uint64, so a hostile header can
+/// claim any length up to 2^64-1; we need a bound that rejects nonsense while
+/// keeping the arithmetic exact. It has to stay at or below 2^53-1 because the
+/// web build represents `int` as a JS double, and dart2js *rejects* integer
+/// literals it cannot represent exactly — a wider cap would not compile.
+/// Real uploads are capped far below this either way (see video_limits.dart).
+const int _maxWideBoxSize = 0x1FFFFFFFFFFFFF; // 2^53 - 1
+
 /// Reads the movie duration straight out of an MP4 (ISO-BMFF) container.
 ///
 /// The composer needs the duration *before* the upload starts — the 60 s cap
@@ -25,7 +35,7 @@ Duration? readMp4Duration(Uint8List bytes) {
     if (size == 1) {
       if (bytes.length - offset < 16) return null;
       final wide = data.getUint64(offset + 8);
-      if (wide > 0x7FFFFFFFFFFFFF) return null;
+      if (wide > _maxWideBoxSize) return null;
       size = wide;
       headerSize = 16;
     } else if (size == 0) {
@@ -49,7 +59,7 @@ Duration? _mvhdDuration(Uint8List bytes, int start, int size, int headerSize) {
     if (childSize == 1) {
       if (pos + 16 > end) return null;
       final wide = data.getUint64(pos + 8);
-      if (wide > 0x7FFFFFFFFFFFFF) return null;
+      if (wide > _maxWideBoxSize) return null;
       childSize = wide;
       childHeader = 16;
     } else if (childSize == 0) {
@@ -66,7 +76,7 @@ Duration? _mvhdDuration(Uint8List bytes, int start, int size, int headerSize) {
         if (payload + 32 > end) return null;
         timescale = data.getUint32(payload + 20);
         final wide = data.getUint64(payload + 24);
-        if (wide > 0x7FFFFFFFFFFFFF) return null;
+        if (wide > _maxWideBoxSize) return null;
         duration = wide;
       } else {
         if (payload + 20 > end) return null;
