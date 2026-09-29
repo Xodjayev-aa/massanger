@@ -35,6 +35,20 @@ export type Env = Readonly<{
   /** Extra push-service hosts beyond the built-in allowlist (`*.example.com`). */
   webPushEndpointHosts: string[];
 
+  /**
+   * Video object storage: Backblaze B2 through its S3-compatible API.
+   * Optional in the same all-or-nothing sense as Web Push — without these five
+   * values `video-ticket` reports `configured: false` and the app hides the
+   * video affordances instead of offering an upload that cannot land. Never
+   * Supabase Storage: the free tier's egress and file caps make a video there
+   * a suspension waiting to happen.
+   */
+  videoS3Endpoint: string | null;
+  videoS3Region: string | null;
+  videoS3AccessKeyId: string | null;
+  videoS3SecretAccessKey: string | null;
+  videoBucket: string | null;
+
   /** Misc */
   allowedOrigins: string[];
   maxBodyBytes: number;
@@ -95,6 +109,12 @@ export function readEnv(): Env {
     webPushSweepToken: str('WEB_PUSH_SWEEP_TOKEN'),
     webPushEndpointHosts: list('WEB_PUSH_ENDPOINT_HOSTS'),
 
+    videoS3Endpoint: str('VIDEO_S3_ENDPOINT'),
+    videoS3Region: str('VIDEO_S3_REGION'),
+    videoS3AccessKeyId: str('VIDEO_S3_ACCESS_KEY_ID'),
+    videoS3SecretAccessKey: str('VIDEO_S3_SECRET_ACCESS_KEY'),
+    videoBucket: str('VIDEO_BUCKET'),
+
     allowedOrigins: list('ALLOWED_ORIGINS', ['*']),
     maxBodyBytes: int('MAX_BODY_BYTES', 1_500_000),
     ingestMaxEvents: int('INGEST_MAX_EVENTS', 120),
@@ -131,6 +151,48 @@ export function readEnv(): Env {
   }
   if (env.webPushEndpointHosts.some((host) => !/^(\*\.)?[a-z0-9.-]+$/i.test(host))) {
     throw new HttpError('misconfigured', 'WEB_PUSH_ENDPOINT_HOSTS must be hostnames, optionally *.prefixed');
+  }
+
+  // Video storage follows the same rule as VAPID: five values, all or none.
+  // Validated in every environment so a local stack cannot pass a configuration
+  // that production would reject.
+  const videoParts = [
+    env.videoS3Endpoint,
+    env.videoS3Region,
+    env.videoS3AccessKeyId,
+    env.videoS3SecretAccessKey,
+    env.videoBucket,
+  ];
+  const videoSet = videoParts.filter((part) => part !== null).length;
+  if (videoSet !== 0 && videoSet !== videoParts.length) {
+    throw new HttpError(
+      'misconfigured',
+      'VIDEO_S3_ENDPOINT, VIDEO_S3_REGION, VIDEO_S3_ACCESS_KEY_ID, VIDEO_S3_SECRET_ACCESS_KEY and VIDEO_BUCKET must be set together',
+    );
+  }
+  if (env.videoS3Endpoint !== null) {
+    let endpointOk = false;
+    try {
+      const url = new URL(env.videoS3Endpoint);
+      endpointOk = url.protocol === 'https:' && url.pathname === '/' && !url.search && !url.hash;
+    } catch {
+      endpointOk = false;
+    }
+    if (!endpointOk) {
+      throw new HttpError('misconfigured', 'VIDEO_S3_ENDPOINT must be an https origin without a path, query or fragment');
+    }
+  }
+  if (env.videoS3Region !== null && !/^[a-z0-9-]{1,64}$/.test(env.videoS3Region)) {
+    throw new HttpError('misconfigured', 'VIDEO_S3_REGION must be a region slug like us-west-000');
+  }
+  if (env.videoBucket !== null && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(env.videoBucket)) {
+    throw new HttpError('misconfigured', 'VIDEO_BUCKET must be a valid bucket name');
+  }
+  if (env.videoS3AccessKeyId !== null && env.videoS3AccessKeyId.length < 16) {
+    throw new HttpError('misconfigured', 'VIDEO_S3_ACCESS_KEY_ID looks too short to be a real key id');
+  }
+  if (env.videoS3SecretAccessKey !== null && env.videoS3SecretAccessKey.length < 16) {
+    throw new HttpError('misconfigured', 'VIDEO_S3_SECRET_ACCESS_KEY looks too short to be a real secret');
   }
 
   if (environment === 'production' || environment === 'staging') {

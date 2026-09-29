@@ -9,6 +9,7 @@ import '../features/chats/chats_page.dart';
 import '../features/chats/new_chat_page.dart';
 import '../features/chats/search_page.dart';
 import '../features/profile/profile_page.dart';
+import '../features/shorts/shorts_page.dart';
 import '../features/telegram/link_page.dart';
 import '../features/telegram/telegram_page.dart';
 
@@ -24,6 +25,7 @@ class Routes {
   static const String telegram = '/telegram';
   static const String telegramLink = '/telegram/link';
   static const String profile = '/me';
+  static const String shorts = '/shorts';
 
   static String chat(String chatId) => '$chats/$chatId';
   static String newChat({String? username}) => username == null ? '$chats/new' : '$chats/new?username=$username';
@@ -69,6 +71,7 @@ GoRouter buildRouter(AuthBloc auth, Listenable refresh) {
       GoRoute(path: Routes.signIn, builder: (context, state) => const SignInPage()),
       GoRoute(path: Routes.gate, builder: (context, state) => const GatePage()),
       GoRoute(path: Routes.search, builder: (context, state) => const SearchPage()),
+      GoRoute(path: Routes.shorts, builder: (context, state) => const ShortsPage()),
       GoRoute(path: Routes.telegram, builder: (context, state) => const TelegramPage()),
       GoRoute(path: Routes.telegramLink, builder: (context, state) => const LinkPage()),
       GoRoute(path: Routes.profile, builder: (context, state) => const ProfilePage()),

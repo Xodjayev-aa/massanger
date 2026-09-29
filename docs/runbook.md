@@ -55,7 +55,7 @@ keys or seed data to production.
    Use the Supabase CLI authenticated **on your own trusted machine** to link
    the project: `supabase link --project-ref <your-project-ref>`, then
    `supabase db push`. This applies every migration in `supabase/migrations/`
-   (currently `00001` through `00018`); do **not**
+   (currently `00001` through `00019`); do **not**
    run `supabase db reset` on production (it drops data), and do not import
    `supabase/seed.sql` into live users' data. Check every migration result and
    inspect RLS, grants, Storage buckets and Realtime publication in Dashboard.
@@ -92,7 +92,8 @@ keys or seed data to production.
    asymmetric user JWTs: `requireUser` validates tokens with Supabase Auth's
    `getUser()` and rejects non-user roles.
 4. Run `supabase functions deploy telegram-link`, `telegram-send`,
-   `web-push-send --no-verify-jwt` (see §5b) and
+   `web-push-send --no-verify-jwt` (see §5b), `video-ticket` (see §5c — JWT
+   verification **on**) and
    `telegram-ingest` (or `make deploy`, which also deploys the read-only legacy
    `account-age-gate` status route). In the hosted Functions settings verify
    `telegram-link`/`telegram-send` have **JWT verification on**;
@@ -338,6 +339,77 @@ If a future push service is not on the built-in allowlist (`fcm.googleapis.com`,
 and `*.` subdomains), add it with `WEB_PUSH_ENDPOINT_HOSTS` rather than
 loosening the check: the endpoint is user-supplied input, and the allowlist is
 what stops it becoming an SSRF primitive.
+
+## 5c. Video storage: Backblaze B2 ($0, no credit card)
+
+Shorts and video messages store their bytes in **Backblaze B2**, never in
+Supabase Storage (Free: 1 GB files + 5 GB egress — a single day of video would
+suspend the project) and never in Google Drive (5 GB/day caps). B2's Free
+tier needs **no credit card**: 10 GB stored, egress free up to 3× the average
+monthly stored data (and unlimited via Cloudflare/Fastly CDN partners), 2,500
+Class B transactions/day — comfortably above a small feed. Videos are stored
+as-is: MP4 only, ≤ 250 MB, ≤ 60 s (Shorts) / ≤ 15 min (Phase 2), 1080p, no
+transcoding pipeline, ever.
+
+1. **Create the bucket.** Sign up at Backblaze (payment method optional), then
+   B2 → Bucket → Add Bucket: a **private** bucket, e.g. `messengerx-video`,
+   files only, no "force download" setting. Production and any shared
+   deployment use their own bucket so a key leak cannot cross tenants.
+
+2. **Add an Application Key** (not the Master Application Key): App Keys →
+   Add Application Key, scoped to **that bucket only**, with no filename
+   prefix restriction. Copy the *keyID* and *applicationKey* immediately — the
+   secret half is shown **once**. The key ID is the S3 access key ID; the
+   application key is the S3 secret access key. Never put either in this
+   repository, in Vercel, or in Flutter.
+
+3. **CORS — required or the browser cannot upload or play.** Bucket →
+   Settings → CORS Rules (or `b2_update_bucket`): allowed origins must be
+   exact scheme+host+port, **no trailing slash**:
+
+   | Origin | Why |
+   | --- | --- |
+   | `https://officialmessengerx.vercel.app` | the deployed PWA/web app |
+   | `http://localhost:5050` | `flutter run --web-port 5050` (see §2) |
+   | `http://127.0.0.1:5050` | the same dev server by its other name |
+
+   Allowed operations **PUT, GET and HEAD** — in B2's rule format that is
+   `b2_upload_file` (PUT, the upload), `b2_download_file_by_name` (GET, video
+   playback in the browser) and `b2_get_file_info` (the S3 `HeadObject` that
+   `confirm` performs server-side; allowing it is harmless). Allowed headers
+   `*`, recommended `maxAgeSeconds` 3600. A wrong origin surfaces as an opaque
+   CORS error in the browser console — fix the rule, not the app.
+
+4. **Set the five function secrets** (dashboard or CLI; never in a Git
+   commit). `video-ticket` is all-or-nothing: with any of the five missing it
+   answers `configured: false`, and the app hides every video affordance
+   instead of offering an upload that cannot land:
+
+   ```bash
+   supabase secrets set \
+     VIDEO_S3_ENDPOINT=https://s3.<region>.backblazeb2.com \
+     VIDEO_S3_REGION=<region> \
+     VIDEO_S3_ACCESS_KEY_ID=<application key ID> \
+     VIDEO_S3_SECRET_ACCESS_KEY=<application key> \
+     VIDEO_BUCKET=<your bucket name>
+   ```
+
+   `VIDEO_S3_ENDPOINT` is an HTTPS origin only — no path, query or fragment.
+   The region comes from the bucket page or the key's home region
+   (e.g. `us-west-002`). `supabase/functions/.env.example` carries the same
+   five names for local development.
+
+5. **Deploy and verify.** `supabase functions deploy video-ticket`
+   (JWT verification **on** — it is a user-authenticated ticket office). Then
+   from the app: the Shorts entry on `/chats` opens a feed, the composer's
+   camera button posts a clip in a DM. `supabase secrets set` and bucket
+   changes take a moment to propagate; re-open the screen rather than
+   expecting a live page to flip.
+
+6. **Watch the bill, not just the app.** Storage past 10 GB, egress past 3×
+   stored, and Class B past 2,500/day are the only three numbers that cost
+   money. Rotate the application key from the Backblaze console and re-run
+   step 4 when anyone with the old key leaves the project.
 
 ## 6. Installable app limitations
 

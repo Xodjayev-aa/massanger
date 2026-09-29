@@ -10,6 +10,7 @@ import '../../data/models.dart';
 import '../../data/voice_service.dart';
 import 'chat_bloc.dart';
 import 'photo_viewer.dart';
+import 'video_viewer.dart';
 
 /// One bubble: text, photo or voice note, plus its state line.
 ///
@@ -112,6 +113,15 @@ class MessageBubble extends StatelessWidget {
             VoiceBubble(messageId: message.id, media: media, mine: message.isMine)
           else
             const Text('Voice note unavailable'),
+          if ((message.body ?? '').isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: SelectableText(message.body!),
+            ),
+        ];
+      case MessageKind.video:
+        return <Widget>[
+          _VideoClip(message: message),
           if ((message.body ?? '').isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -305,6 +315,112 @@ class _PhotoState extends State<_Photo> {
               height: 140,
               child: Center(child: Icon(Icons.broken_image_rounded, color: Theme.of(context).colorScheme.outline)),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Video bubble: a 240×135 still with a play affordance and the duration
+/// chip, exactly like the photo bubble's shape — the clip itself plays in
+/// [VideoViewer] after the tap, so a long thread never initializes a player
+/// per message. Resolution goes through the repository's signed-URL cache.
+class _VideoClip extends StatefulWidget {
+  const _VideoClip({required this.message});
+
+  final MessageItem message;
+
+  @override
+  State<_VideoClip> createState() => _VideoClipState();
+}
+
+class _VideoClipState extends State<_VideoClip> {
+  String? _url;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  Future<void> _resolve() async {
+    try {
+      final url = await sl<ChatRepository>().urlFor(widget.message.media);
+      if (!mounted) return;
+      setState(() {
+        _url = url;
+        _failed = url == null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final media = widget.message.media;
+    final duration = media is VideoMedia ? media.duration : Duration.zero;
+    const width = 240.0;
+    const height = 135.0;
+
+    if (_url == null) {
+      return Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Center(
+          child: _failed
+              ? Icon(Icons.videocam_off_rounded, color: theme.colorScheme.outline)
+              : const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      );
+    }
+
+    final url = _url!;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => VideoViewer(url: url, duration: duration),
+          ),
+        ),
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              const ColoredBox(color: Color(0xFF14161A)),
+              Center(
+                child: Icon(
+                  Icons.play_circle_fill_rounded,
+                  size: 52,
+                  color: Colors.white.withAlpha(210),
+                ),
+              ),
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withAlpha(160),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    ChatFormatting.duration(duration),
+                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

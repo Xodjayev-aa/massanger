@@ -110,6 +110,59 @@ void main() {
     });
   });
 
+  group('video media map', () {
+    // Mirrors app.validate_message_media's video branch (00019) exactly:
+    // store+key instead of a Supabase bucket, MP4 only, ≤60 s, ≤250 MB.
+    const VideoMedia sample = VideoMedia(
+      key: 'c0ffee00-0000-0000-0000-000000000001/app/1770000000_ab12cd34.mp4',
+      duration: Duration(seconds: 15),
+      sizeBytes: 52428800,
+    );
+
+    test('carries the keys validate_message_media reads', () {
+      final Map<String, Object?> map = sample.toMap();
+      expect(map['kind'], 'video');
+      expect(map['store'], 'b2');
+      expect(map['key'], sample.key);
+      expect(map['mime'], 'video/mp4');
+      expect(map['duration_ms'], 15000);
+      expect(map['duration_ms'], isA<int>());
+      expect(map['size_bytes'], 52428800);
+      expect(map['size_bytes'], isA<int>());
+      // Video lives in B2: any Supabase `bucket` reference is a hard error
+      // server-side, so the key must not even exist in the map.
+      expect(map.containsKey('bucket'), isFalse);
+      expect(sample.bucket, isNull);
+      expect(sample.isExternal, isFalse, reason: 'the object key is the storage path');
+    });
+
+    test('satisfies the caps the validator enforces', () {
+      expect(sample.duration.inMilliseconds, greaterThan(0));
+      expect(sample.duration.inMilliseconds, lessThanOrEqualTo(60000));
+      expect(sample.sizeBytes, greaterThan(0));
+      expect(sample.sizeBytes, lessThanOrEqualTo(250 * 1024 * 1024));
+      expect(sample.key.startsWith('/'), isFalse);
+      expect(sample.key.contains('..'), isFalse);
+      expect(sample.mime, 'video/mp4');
+    });
+
+    test('fromMap round-trips through messages.media unchanged', () {
+      final MessageMedia parsed = MessageMedia.fromMap(sample.toMap())!;
+      expect(parsed, isA<VideoMedia>());
+      expect(parsed.toMap(), sample.toMap());
+      expect((parsed as VideoMedia).duration, const Duration(seconds: 15));
+      expect(parsed.sizeBytes, 52428800);
+    });
+
+    test('an unknown kind tag still dispatches by shape, never by crash', () {
+      // A video map without its kind tag falls through the legacy heuristic —
+      // it is treated as an image rather than throwing, because an unknown
+      // value must not crash a client one migration behind the server.
+      final Map<String, Object?> untagged = <String, Object?>{'key': 'chat/a/b.mp4', 'store': 'b2'};
+      expect(MessageMedia.fromMap(untagged), isA<ImageMedia>());
+    });
+  });
+
   group('fromMap dispatch', () {
     test('kind decides, and duration_ms breaks the tie', () {
       const VoiceMedia voice = VoiceMedia(
@@ -120,6 +173,7 @@ void main() {
       final Map<String, Object?> voiceMap = <String, Object?>{...voice.toMap(), 'waveform': waveform};
       expect(MessageMedia.fromMap(voiceMap), isA<VoiceMedia>());
       expect(MessageMedia.fromMap(const ImageMedia(bucket: 'images', storagePath: 'a/b.jpg').toMap()), isA<ImageMedia>());
+      expect(MessageMedia.fromMap(const VideoMedia(key: 'chat/a/app/b.mp4').toMap()), isA<VideoMedia>());
 
       const Map<String, Object?> untagged = <String, Object?>{'bucket': 'voice-notes', 'path': 'a/b.wav', 'duration_ms': 900};
       expect(MessageMedia.fromMap(untagged), isA<VoiceMedia>());
