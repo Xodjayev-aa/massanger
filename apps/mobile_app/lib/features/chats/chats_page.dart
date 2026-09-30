@@ -10,73 +10,132 @@ import '../../data/telegram_repository.dart';
 import 'chats_bloc.dart';
 import 'widgets.dart';
 
-/// The chat list. It doubles as the app's home: the Telegram bridge status lives in
-/// the app bar, and the unread total is the number the user actually cares about.
-class ChatsPage extends StatelessWidget {
+/// The chat list. It doubles as the app's messaging tab: with dual views for
+/// Direct Messages (Telegram-style) and Servers/Channels (Discord-style).
+class ChatsPage extends StatefulWidget {
   const ChatsPage({super.key});
 
   @override
+  State<ChatsPage> createState() => _ChatsPageState();
+}
+
+class _ChatsPageState extends State<ChatsPage> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MessengerX'),
+        title: TabBar(
+          controller: _tabController,
+          indicatorColor: scheme.primary,
+          indicatorWeight: 3,
+          labelColor: scheme.onSurface,
+          unselectedLabelColor: scheme.onSurfaceVariant,
+          labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+          tabs: const <Widget>[
+            Tab(
+              icon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.send_rounded, size: 16),
+                  SizedBox(width: 6),
+                  Text('Direct Chats (Telegram)'),
+                ],
+              ),
+            ),
+            Tab(
+              icon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.tag_rounded, size: 16),
+                  SizedBox(width: 6),
+                  Text('Servers & Channels (Discord)'),
+                ],
+              ),
+            ),
+          ],
+        ),
         actions: <Widget>[
-          IconButton(
-            tooltip: 'Shorts',
-            icon: const Icon(Icons.smart_display_outlined),
-            onPressed: () => context.push(Routes.shorts),
-          ),
-          IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search_rounded),
-            onPressed: () => context.push(Routes.search),
-          ),
           const _TelegramAction(),
-          IconButton(
-            tooltip: 'You',
-            icon: const Icon(Icons.account_circle_rounded),
-            onPressed: () => context.push(Routes.profile),
-          ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 8),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => context.push(Routes.newChat()),
         icon: const Icon(Icons.edit_rounded),
-        label: const Text('New chat'),
+        label: Text(_tabController.index == 0 ? 'New chat' : 'New channel'),
       ),
       body: SafeArea(
-        child: BlocBuilder<ChatsBloc, ChatsState>(
-          builder: (context, state) {
-            if (state.isLoading) return const Center(child: CircularProgressIndicator());
-            if (state.status == ChatsStatus.failure) {
-              return Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: <Widget>[
-                    InlineError(
-                      message: _failureText(state.error),
-                      onRetry: () => context.read<ChatsBloc>().add(const ChatsRefreshRequested()),
-                    ),
-                  ],
-                ),
-              );
-            }
-            final chats = state.visible;
-            return RefreshIndicator(
-              onRefresh: () async => context.read<ChatsBloc>().refresh(),
-              child: chats.isEmpty
-                  ? _EmptyList(hasQuery: state.query.trim().isNotEmpty)
-                  : ListView.separated(
-                      padding: const EdgeInsets.only(bottom: 96),
-                      itemCount: chats.length,
-                      separatorBuilder: (context, index) => const Divider(indent: 74, height: 1),
-                      itemBuilder: (context, index) => ChatTile(chat: chats[index]),
-                    ),
-            );
-          },
+        child: TabBarView(
+          controller: _tabController,
+          children: <Widget>[
+            // Tab 1: Telegram-style Direct Chats
+            _buildChatsList(context, isServerView: false),
+            // Tab 2: Discord-style Servers & Channels
+            _buildChatsList(context, isServerView: true),
+          ],
         ),
       ),
+    );
+  }
+
+  Widget _buildChatsList(BuildContext context, {required bool isServerView}) {
+    return BlocBuilder<ChatsBloc, ChatsState>(
+      builder: (context, state) {
+        if (state.isLoading) return const Center(child: CircularProgressIndicator());
+        if (state.status == ChatsStatus.failure) {
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: <Widget>[
+                InlineError(
+                  message: _failureText(state.error),
+                  onRetry: () => context.read<ChatsBloc>().add(const ChatsRefreshRequested()),
+                ),
+              ],
+            ),
+          );
+        }
+        final allChats = state.visible;
+        final filteredChats = allChats.where((c) {
+          if (isServerView) {
+            return c.kind == ChatKind.group;
+          } else {
+            return c.kind == ChatKind.direct;
+          }
+        }).toList();
+
+        return RefreshIndicator(
+          onRefresh: () async => context.read<ChatsBloc>().refresh(),
+          child: filteredChats.isEmpty
+              ? _EmptyList(
+                  hasQuery: state.query.trim().isNotEmpty,
+                  isServerView: isServerView,
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.only(bottom: 96),
+                  itemCount: filteredChats.length,
+                  separatorBuilder: (context, index) => const Divider(indent: 74, height: 1),
+                  itemBuilder: (context, index) => ChatTile(chat: filteredChats[index], isServerView: isServerView),
+                ),
+        );
+      },
     );
   }
 }
@@ -150,25 +209,37 @@ class _TelegramActionState extends State<_TelegramAction> {
 }
 
 class ChatTile extends StatelessWidget {
-  const ChatTile({super.key, required this.chat});
+  const ChatTile({super.key, required this.chat, this.isServerView = false});
 
   final ChatSummary chat;
+  final bool isServerView;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final name = chat.displayName;
+    final name = isServerView ? '#${chat.displayName.replaceAll(' ', '-').toLowerCase()}' : chat.displayName;
     final preview = chat.previewKind == 'image'
         ? 'Photo${chat.previewBody == null || chat.previewBody!.isEmpty ? '' : ': ${chat.previewBody}'}'
         : chat.subtitle;
 
     return ListTile(
       onTap: () => context.push(Routes.chat(chat.chatId)),
-      leading: PersonAvatar(
-        name: name,
-        path: chat.avatar ?? chat.peerAvatarPath,
-        isOnline: chat.peerIsOnline,
-      ),
+      leading: isServerView
+          ? Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFF5865F2).withAlpha(35),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF5865F2).withAlpha(80)),
+              ),
+              child: const Icon(Icons.tag_rounded, color: Color(0xFF5865F2)),
+            )
+          : PersonAvatar(
+              name: name,
+              path: chat.avatar ?? chat.peerAvatarPath,
+              isOnline: chat.peerIsOnline,
+            ),
       title: Row(
         children: <Widget>[
           Expanded(
@@ -223,9 +294,10 @@ class ChatTile extends StatelessWidget {
 }
 
 class _EmptyList extends StatelessWidget {
-  const _EmptyList({required this.hasQuery});
+  const _EmptyList({required this.hasQuery, this.isServerView = false});
 
   final bool hasQuery;
+  final bool isServerView;
 
   @override
   Widget build(BuildContext context) {
@@ -233,16 +305,24 @@ class _EmptyList extends StatelessWidget {
     return ListView(
       children: <Widget>[
         const SizedBox(height: 96),
-        Icon(Icons.forum_rounded, size: 42, color: theme.colorScheme.outline),
+        Icon(isServerView ? Icons.tag_rounded : Icons.forum_rounded, size: 42, color: theme.colorScheme.outline),
         const SizedBox(height: 14),
         Text(
-          hasQuery ? 'No chat matches that.' : 'No conversations yet.',
+          hasQuery
+              ? 'No matches found.'
+              : isServerView
+                  ? 'No community channels yet.'
+                  : 'No conversations yet.',
           textAlign: TextAlign.center,
           style: theme.textTheme.titleMedium,
         ),
         const SizedBox(height: 6),
         Text(
-          hasQuery ? 'Try a name from the search tab.' : 'Start one, or connect Telegram in Settings to mirror your chats.',
+          hasQuery
+              ? 'Try searching from the universal search bar.'
+              : isServerView
+                  ? 'Create a #channel to start a Discord-style server.'
+                  : 'Start a direct chat, or link Telegram in Settings to mirror your conversations.',
           textAlign: TextAlign.center,
           style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),

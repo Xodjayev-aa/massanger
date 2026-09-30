@@ -5,7 +5,7 @@ import '../core/errors.dart';
 import '../core/video_limits.dart';
 import 'video_repository.dart';
 
-/// One row of the Shorts feed, plus the projection the overlay needs.
+/// One row of the Shorts feed or Long video, plus the projection the overlay needs.
 class ShortVideo {
   const ShortVideo({
     required this.id,
@@ -16,10 +16,17 @@ class ShortVideo {
     required this.likeCount,
     required this.createdAt,
     this.caption,
+    this.title,
+    this.description,
+    this.feedType = 'short',
+    this.viewCount = 0,
     this.likedByMe = false,
     this.authorName,
     this.authorUsername,
     this.authorAvatarPath,
+    this.authorRoleBadge,
+    this.authorRoleColor,
+    this.authorDiscriminator,
   });
 
   final String id;
@@ -32,12 +39,21 @@ class ShortVideo {
   final int likeCount;
   final DateTime createdAt;
   final String? caption;
+  final String? title;
+  final String? description;
+  final String feedType;
+  final int viewCount;
 
   /// Local overlay: the feed's like set for *this* user, merged in by [page].
   final bool likedByMe;
   final String? authorName;
   final String? authorUsername;
   final String? authorAvatarPath;
+  final String? authorRoleBadge;
+  final String? authorRoleColor;
+  final int? authorDiscriminator;
+
+  bool get isLong => feedType == 'long';
 
   factory ShortVideo.fromMap(Map<String, dynamic> map) => ShortVideo(
         id: '${map['id']}',
@@ -47,10 +63,24 @@ class ShortVideo {
         sizeBytes: (map['size_bytes'] as num?)?.toInt() ?? 0,
         likeCount: (map['like_count'] as num?)?.toInt() ?? 0,
         caption: map['caption'] as String?,
+        title: map['title'] as String?,
+        description: map['description'] as String?,
+        feedType: map['feed_type'] as String? ?? 'short',
+        viewCount: (map['view_count'] as num?)?.toInt() ?? 0,
         createdAt: DateTime.tryParse('${map['created_at']}') ?? DateTime.fromMillisecondsSinceEpoch(0),
       );
 
-  ShortVideo copyWith({int? likeCount, bool? likedByMe, String? authorName, String? authorUsername, String? authorAvatarPath}) =>
+  ShortVideo copyWith({
+    int? likeCount,
+    int? viewCount,
+    bool? likedByMe,
+    String? authorName,
+    String? authorUsername,
+    String? authorAvatarPath,
+    String? authorRoleBadge,
+    String? authorRoleColor,
+    int? authorDiscriminator,
+  }) =>
       ShortVideo(
         id: id,
         authorId: authorId,
@@ -60,10 +90,17 @@ class ShortVideo {
         likeCount: likeCount ?? this.likeCount,
         createdAt: createdAt,
         caption: caption,
+        title: title,
+        description: description,
+        feedType: feedType,
+        viewCount: viewCount ?? this.viewCount,
         likedByMe: likedByMe ?? this.likedByMe,
         authorName: authorName ?? this.authorName,
         authorUsername: authorUsername ?? this.authorUsername,
         authorAvatarPath: authorAvatarPath ?? this.authorAvatarPath,
+        authorRoleBadge: authorRoleBadge ?? this.authorRoleBadge,
+        authorRoleColor: authorRoleColor ?? this.authorRoleColor,
+        authorDiscriminator: authorDiscriminator ?? this.authorDiscriminator,
       );
 }
 
@@ -78,13 +115,23 @@ class ShortsRepository {
   static const int pageSize = 10;
 
   static const String _rowColumns =
-      'id, author_id, object_key, duration_ms, size_bytes, caption, like_count, created_at';
+      'id, author_id, object_key, duration_ms, size_bytes, caption, like_count, created_at, feed_type, title, description, view_count';
 
   /// The next page, newest first. [beforeId] is the last id of the previous
-  /// page; null starts the feed.
-  Future<List<ShortVideo>> page({String? beforeId, int limit = pageSize}) async {
+  /// page; null starts the feed. [feedType] filters by 'short' vs 'long'.
+  Future<List<ShortVideo>> page({String? beforeId, int limit = pageSize, String? feedType, bool followingOnly = false}) async {
     try {
       var filter = _client.from('shorts').select(_rowColumns);
+      if (feedType != null) {
+        filter = filter.eq('feed_type', feedType);
+      }
+      if (followingOnly && _uidOrNull != null) {
+        final followingRes = await _client.from('follows').select('following_id').eq('follower_id', _uidOrNull!);
+        final followingIds = (followingRes as List<dynamic>).map((e) => '${(e as Map)['following_id']}').toList();
+        if (followingIds.isEmpty) return <ShortVideo>[];
+        final inList = '(${followingIds.map((id) => '"$id"').join(',')})';
+        filter = filter.filter('author_id', 'in', inList);
+      }
       if (beforeId != null && beforeId.isNotEmpty) filter = filter.lt('id', beforeId);
       final rows = await filter.order('id', ascending: false).limit(limit);
       final shorts = (rows as List<dynamic>)
@@ -119,6 +166,15 @@ class ShortsRepository {
     }
   }
 
+  /// Increments view count on a video.
+  Future<void> recordView(String videoId) async {
+    try {
+      await _client.rpc('increment_video_views', params: <String, dynamic>{'p_video_id': videoId});
+    } catch (_) {
+      // Non-critical metric
+    }
+  }
+
   /// Optimistic callers flip their own state first and call this to persist.
   Future<void> like(String shortId) async {
     try {
@@ -146,11 +202,20 @@ class ShortsRepository {
   /// The full publish flow: validate → presigned PUT → direct-to-B2 upload →
   /// server confirm (real size + duration) → insert the row with the
   /// *verified* numbers, never the declared ones.
-  Future<ShortVideo> publish({required XFile file, String? caption}) async {
+  Future<ShortVideo> publish({
+    required XFile file,
+    String? caption,
+    String? title,
+    String? description,
+    String feedType = 'short',
+  }) async {
     final trimmedCaption = caption == null ? null : caption.trim();
     if (trimmedCaption != null && trimmedCaption.length > 500) {
       throw const AppException('bad_request', 'Short captions stay under 500 characters.');
     }
+    final trimmedTitle = title?.trim();
+    final trimmedDesc = description?.trim();
+
     final bytes = await file.readAsBytes();
     final duration = VideoLimits.preflight(file.name, bytes);
     final uid = _uid;
@@ -171,7 +236,10 @@ class ShortsRepository {
           'mime': VideoLimits.mime,
           'duration_ms': verified.duration.inMilliseconds,
           'size_bytes': verified.sizeBytes,
+          'feed_type': feedType,
           if (trimmedCaption != null && trimmedCaption.isNotEmpty) 'caption': trimmedCaption,
+          if (trimmedTitle != null && trimmedTitle.isNotEmpty) 'title': trimmedTitle,
+          if (trimmedDesc != null && trimmedDesc.isNotEmpty) 'description': trimmedDesc,
         })
         .select(_rowColumns)
         .single();
@@ -203,7 +271,7 @@ class ShortsRepository {
     final inList = '(${authorIds.map((id) => '"$id"').join(',')})';
     final rows = await _client
         .from('directory')
-        .select('id, display_name, username, avatar_path')
+        .select('id, display_name, username, avatar_path, role_badge, role_color, discriminator')
         .filter('id', 'in', inList);
     // Guard before converting: `rows` is a dynamic list, and strict-casts
     // (analysis_options) rejects an implicit dynamic → Map conversion — the
@@ -222,6 +290,9 @@ class ShortsRepository {
           authorName: author['display_name'] as String?,
           authorUsername: author['username'] as String?,
           authorAvatarPath: author['avatar_path'] as String?,
+          authorRoleBadge: author['role_badge'] as String?,
+          authorRoleColor: author['role_color'] as String?,
+          authorDiscriminator: author['discriminator'] as int?,
         );
       }
     }

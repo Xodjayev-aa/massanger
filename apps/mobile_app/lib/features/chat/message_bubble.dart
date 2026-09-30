@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../app/di.dart';
 import '../../app/theme.dart';
+import '../../core/discord_markdown.dart';
 import '../../core/errors.dart';
 import '../../core/formatting.dart';
 import '../../data/chat_repository.dart';
@@ -103,7 +104,14 @@ class MessageBubble extends StatelessWidget {
           if ((message.body ?? '').isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: SelectableText(message.body!),
+              child: SelectableText.rich(
+                TextSpan(
+                  children: DiscordMarkdown.parse(
+                    message.body!,
+                    context: context,
+                  ),
+                ),
+              ),
             ),
         ];
       case MessageKind.voice:
@@ -116,7 +124,14 @@ class MessageBubble extends StatelessWidget {
           if ((message.body ?? '').isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: SelectableText(message.body!),
+              child: SelectableText.rich(
+                TextSpan(
+                  children: DiscordMarkdown.parse(
+                    message.body!,
+                    context: context,
+                  ),
+                ),
+              ),
             ),
         ];
       case MessageKind.video:
@@ -125,7 +140,14 @@ class MessageBubble extends StatelessWidget {
           if ((message.body ?? '').isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: SelectableText(message.body!),
+              child: SelectableText.rich(
+                TextSpan(
+                  children: DiscordMarkdown.parse(
+                    message.body!,
+                    context: context,
+                  ),
+                ),
+              ),
             ),
         ];
       case MessageKind.system:
@@ -138,9 +160,14 @@ class MessageBubble extends StatelessWidget {
         ];
       case MessageKind.text:
         return <Widget>[
-          SelectableText(
-            message.body ?? '',
-            style: const TextStyle(fontSize: 15, height: 1.35),
+          SelectableText.rich(
+            TextSpan(
+              children: DiscordMarkdown.parse(
+                message.body ?? '',
+                context: context,
+                style: const TextStyle(fontSize: 15, height: 1.35),
+              ),
+            ),
           ),
         ];
     }

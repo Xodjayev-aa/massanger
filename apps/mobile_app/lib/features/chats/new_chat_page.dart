@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/di.dart';
 import '../../app/router.dart';
+import '../../core/discord_markdown.dart';
 import '../../core/errors.dart';
 import '../../data/chat_repository.dart';
 import '../../data/models.dart';
@@ -234,9 +235,22 @@ class _NewChatPageState extends State<NewChatPage> {
                                 path: entry.avatar,
                                 isOnline: entry.isOnline,
                               ),
-                              title: Text(entry.displayName),
+                              title: Row(
+                                children: <Widget>[
+                                  Text(entry.displayName, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                  if (entry.roleBadge != null) ...<Widget>[
+                                    const SizedBox(width: 6),
+                                    DiscordRoleBadge(
+                                      badge: entry.roleBadge!,
+                                      colorHex: entry.roleColor,
+                                      discriminator: entry.discriminator,
+                                      compact: true,
+                                    ),
+                                  ],
+                                ],
+                              ),
                               subtitle: Text(
-                                isSelf ? 'That is you' : '@${entry.username}',
+                                isSelf ? 'That is you' : '@${entry.username}${entry.discriminator != null ? '#${entry.discriminator}' : ''}',
                                 style: theme.textTheme.bodySmall,
                               ),
                               trailing: isSelf ? null : const Icon(Icons.chevron_right_rounded),
