@@ -142,6 +142,13 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+# The bot API. A bot owner holds a token, not a Supabase key: the token is
+# passed straight through to `public.bot_api`, which hashes it, checks the
+# per-minute budget and answers in Telegram's shape. No JWT to verify.
+[functions.bot-api]
+enabled = true
+verify_jwt = false
+
 [studio]
 enabled = true
 port = 54323
