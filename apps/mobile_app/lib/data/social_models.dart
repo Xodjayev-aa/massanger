@@ -86,7 +86,14 @@ class ProfileCard {
         followState: map['follow_state'] as String?,
       );
 
-  ProfileCard copyWith({bool? isFollowing, String? followState, List<TagSummary>? tags}) => ProfileCard(
+  ProfileCard copyWith({
+    bool? isFollowing,
+    String? followState,
+    List<TagSummary>? tags,
+    int? followerCount,
+    int? followingCount,
+  }) =>
+      ProfileCard(
         id: id,
         username: username,
         discriminator: discriminator,
@@ -96,8 +103,8 @@ class ProfileCard {
         verified: verified,
         isPrivate: isPrivate,
         accountKind: accountKind,
-        followerCount: followerCount,
-        followingCount: followingCount,
+        followerCount: followerCount ?? this.followerCount,
+        followingCount: followingCount ?? this.followingCount,
         postCount: postCount,
         isFollowing: isFollowing ?? this.isFollowing,
         followsMe: followsMe,
@@ -334,6 +341,9 @@ class ShortCard {
     required this.likeCount,
     required this.viewCount,
     required this.createdAt,
+    this.commentCount = 0,
+    this.shareCount = 0,
+    this.saveCount = 0,
     this.caption,
     this.duration = Duration.zero,
     this.kind = 'original',
@@ -366,6 +376,9 @@ class ShortCard {
   final String kind;
   final String visibilityDefault = 'public';
   final int likeCount;
+  final int commentCount;
+  final int shareCount;
+  final int saveCount;
   final int viewCount;
   final DateTime createdAt;
   final String? soundId;
@@ -398,6 +411,9 @@ class ShortCard {
         caption: map['caption'] as String?,
         kind: '${map['kind'] ?? 'original'}',
         likeCount: _int(map['like_count']),
+        commentCount: _int(map['comment_count']),
+        shareCount: _int(map['share_count']),
+        saveCount: _int(map['save_count']),
         viewCount: _int(map['view_count']),
         createdAt: _time(map['created_at']),
         soundId: map['sound_id'] as String?,
@@ -418,6 +434,8 @@ class ShortCard {
   ShortCard copyWith({
     String? playbackUrl,
     int? likeCount,
+    int? commentCount,
+    int? saveCount,
     bool? likedByMe,
     bool? savedByMe,
     bool? followedByMe,
@@ -432,6 +450,9 @@ class ShortCard {
         caption: caption,
         kind: kind,
         likeCount: likeCount ?? this.likeCount,
+        commentCount: commentCount ?? this.commentCount,
+        shareCount: shareCount,
+        saveCount: saveCount ?? this.saveCount,
         viewCount: viewCount,
         createdAt: createdAt,
         soundId: soundId,
@@ -579,6 +600,10 @@ class SoundSummary {
 
   bool get isVoiceOver => origin == 'tts';
 
+  /// True when the audio was rendered by the platform's text-to-speech: the
+  /// script is stored so the device can re-render it in another voice (00021).
+  bool get isVoiceOver => origin == 'tts';
+
   factory SoundSummary.fromMap(Map<String, dynamic> map) => SoundSummary(
         id: '${map['id']}',
         title: '${map['title'] ?? 'Original sound'}',
@@ -647,6 +672,16 @@ class NotificationItem {
         commentId: map['comment_id'] as String?,
         payload: asMap(map['payload']),
       );
+}
+
+/// A category chip: what the feed groups long-form videos by.
+class VideoCategory {
+  const VideoCategory({required this.slug, required this.label, this.emoji, this.videoCount = 0});
+
+  final String slug;
+  final String label;
+  final String? emoji;
+  final int videoCount;
 }
 
 /// A watch-later list, a channel playlist or a search result group.

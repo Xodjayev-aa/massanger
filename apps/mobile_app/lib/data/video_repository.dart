@@ -5,19 +5,27 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/errors.dart';
 
-/// Which key space a video lives in — `chat/<chatId>/…` or `shorts/<uid>/…`.
+/// Which key space an object lives in — `chat/<chatId>/…`, `shorts/<uid>/…`,
+/// `video/<uid>/…` (long form) or `thumb/<uid>/…` (poster frames).
 /// The edge function re-derives this from the key it is handed and refuses a
 /// mismatch, so a chat ticket can never read a short or another chat.
 enum VideoScope {
   chat('chat'),
-  short('short');
+  short('short'),
+  video('video');
 
   const VideoScope(this.wire);
 
   final String wire;
 
-  static VideoScope fromKey(String key) =>
-      key.startsWith('shorts/') ? VideoScope.short : VideoScope.chat;
+  /// Poster frames are read with the long-form scope: the ticket only cares
+  /// that `get` is authorized, and `media_visible` is what decides whether the
+  /// row behind a `thumb/` key may be seen at all.
+  static VideoScope fromKey(String key) {
+    if (key.startsWith('shorts/')) return VideoScope.short;
+    if (key.startsWith('video/') || key.startsWith('thumb/')) return VideoScope.video;
+    return VideoScope.chat;
+  }
 
   /// The chat id embedded in a `chat/<uuid>/…` key, when there is one.
   static String? chatIdFromKey(String key) {
@@ -53,13 +61,25 @@ class VideoUploadTicket {
 }
 
 /// What `video-ticket confirm` verified by reading the stored bytes: the real
-/// size (HEAD) and the real duration (`moov`/`mvhd`), both already capped.
+/// size (HEAD), the real duration (`moov`/`mvhd`) and what the file actually is
+/// (the first bytes are sniffed, so a renamed file cannot slip past the caps).
+///
+/// [kind] is `video` or `image`: a poster frame is minted through the same
+/// ticket, and only the confirmed values may be written into the database.
 class VerifiedVideo {
-  const VerifiedVideo({required this.key, required this.sizeBytes, required this.duration});
+  const VerifiedVideo({
+    required this.key,
+    required this.sizeBytes,
+    required this.duration,
+    this.kind = 'video',
+  });
 
   final String key;
   final int sizeBytes;
   final Duration duration;
+  final String kind;
+
+  bool get isImage => kind == 'image';
 }
 
 /// The `video-ticket` edge function: the only holder of the S3 secret and the
@@ -85,19 +105,27 @@ class VideoRepository {
     }
   }
 
+  /// Asks for a presigned PUT into the caller's own key space. [mime] is
+  /// `video/mp4` for a clip and `image/jpeg` / `image/png` for a poster frame —
+  /// images are only allowed in the personal space, never in a chat's.
   Future<VideoUploadTicket> requestUpload({
     required VideoScope scope,
     String? chatId,
     required int sizeBytes,
-    required Duration duration,
+    Duration duration = Duration.zero,
+    String mime = 'video/mp4',
   }) async {
     final chat = _requireChatId(scope, chatId);
+    final isImage = mime.startsWith('image/');
+    if (isImage && scope == VideoScope.chat) {
+      throw const AppException('bad_request', 'Poster frames can only be uploaded to your own space.');
+    }
     final data = await _call(<String, Object?>{
       'action': 'put',
       'scope': scope.wire,
       if (chat != null) 'chatId': chat,
-      'mime': 'video/mp4',
-      'durationMs': duration.inMilliseconds,
+      'mime': mime,
+      if (!isImage) 'durationMs': duration.inMilliseconds,
       'sizeBytes': sizeBytes,
     });
     return VideoUploadTicket.fromMap(data);
@@ -122,6 +150,7 @@ class VideoRepository {
       key: '${data['key']}',
       sizeBytes: (data['sizeBytes'] as num?)?.toInt() ?? 0,
       duration: Duration(milliseconds: (data['durationMs'] as num?)?.toInt() ?? 0),
+      kind: data['kind'] is String ? data['kind'] as String : 'video',
     );
   }
 
@@ -198,7 +227,7 @@ class VideoRepository {
   }
 
   String? _requireChatId(VideoScope scope, String? chatId) {
-    if (scope == VideoScope.short) return null;
+    if (scope != VideoScope.chat) return null;
     final chat = chatId;
     if (chat == null || chat.isEmpty) {
       throw const AppException('bad_request', 'A chat video needs its chat.');

@@ -1,5 +1,12 @@
 import 'package:flutter/material.dart';
 
+/// The app-wide theme preference.
+///
+/// It lives outside the widget tree on purpose: Settings flips it, the app
+/// listens to it, and neither has to know about the other. Defaults to the
+/// system so a fresh install matches the phone.
+final ValueNotifier<ThemeMode> appThemeMode = ValueNotifier<ThemeMode>(ThemeMode.system);
+
 /// One source of truth for chat visuals, because a bubble's corner radius and tail
 /// have to agree with the avatar's and with the composer, and the read-receipt
 /// colour has to survive both themes.

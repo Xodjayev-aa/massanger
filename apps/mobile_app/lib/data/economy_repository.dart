@@ -112,12 +112,17 @@ class StoreCatalog {
     this.products = const <StoreProduct>[],
     this.tagMint,
     this.cosmetics = const <CosmeticSummary>[],
+    this.tagStyles = const <CosmeticSummary>[],
     this.ownedCosmetics = const <String>[],
   });
 
   final List<StoreProduct> products;
   final StoreProduct? tagMint;
   final List<CosmeticSummary> cosmetics;
+
+  /// The gradients a minted tag can wear. Kept apart from [cosmetics] because
+  /// the tag editor needs them and the badge shelf does not.
+  final List<CosmeticSummary> tagStyles;
   final List<String> ownedCosmetics;
 
   factory StoreCatalog.fromMap(Map<String, dynamic> map) {
@@ -126,6 +131,7 @@ class StoreCatalog {
       products: asMapList(map['stars']).map(StoreProduct.fromMap).toList(growable: false),
       tagMint: mint is Map ? StoreProduct.fromMap(asMap(mint)) : null,
       cosmetics: asMapList(map['cosmetics']).map(CosmeticSummary.fromMap).toList(growable: false),
+      tagStyles: asMapList(map['tag_styles']).map(CosmeticSummary.fromMap).toList(growable: false),
       ownedCosmetics: asMapList(map['mine'])
           .map((row) => '${row['cosmetic_id']}')
           .toList(growable: false),

@@ -14,6 +14,10 @@ class SocialRepository {
 
   final SupabaseClient _client;
 
+  /// The signed-in user, or null. Screens use it to decide what to offer (pin,
+  /// delete, follow) — never as an authorization check, which the server owns.
+  String? get currentUserId => _client.auth.currentUser?.id;
+
   // ---------------------------------------------------------------------------
   // follow graph
   // ---------------------------------------------------------------------------

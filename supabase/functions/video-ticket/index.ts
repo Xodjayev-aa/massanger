@@ -16,9 +16,20 @@
  *   status  → `{ configured }` so a deployment without B2 secrets can hide the
  *             video affordances instead of offering a broken upload
  *
- * One bucket, two key spaces: `chat/<chatId>/…` and `shorts/<uid>/…`. The
- * prefix is re-derived and re-checked on every action — a ticket for one chat
- * can never read or confirm another.
+ * One bucket, four key spaces: `chat/<chatId>/…`, `shorts/<uid>/…`,
+ * `video/<uid>/…` and the poster frames in `thumb/<uid>/…`. The prefix is
+ * re-derived and re-checked on every action — a ticket for one chat can never
+ * read or confirm another, and an upload can only ever land in the caller's own
+ * space. Posters live in their own space because both publish paths
+ * (`publish_video`, `publish_short`) require a thumbnail key under `thumb/`.
+ *
+ * Reads are the one place where "your own key space" is not the rule, because a
+ * feed plays other people's videos. `get` therefore accepts a foreign
+ * `shorts/`, `video/` or `thumb/` key only when `public.media_visible` — a
+ * database question — says the caller may see the row that references it.
+ * Uploads (put/confirm) and deletes stay owner-only; a poster frame is minted
+ * the same way a video is, with `image/jpeg` or `image/png` instead of
+ * `video/mp4`.
  */
 
 import { type Env, readEnv } from '../_shared/env.ts';
@@ -51,7 +62,25 @@ const GET_EXPIRES_SECONDS = 3600;
 const MAX_DURATION_MS = 60_000;
 const MAX_SIZE_BYTES = 262_144_000; // 250 MB
 
-type Scope = 'chat' | 'short';
+/**
+ * Long-form caps. The object store accepts far more than a phone uploads in one
+ * in-memory PUT; the numbers here are the *server's* limits, so a future
+ * chunked uploader does not need a redeploy — the app's own composer is the
+ * thing that stops at 250 MB today.
+ */
+const MAX_LONG_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
+const MAX_LONG_SIZE_BYTES = 1_073_741_824; // 1 GiB
+/** Poster frames are images: small, and only in the caller's own key space. */
+const MAX_IMAGE_BYTES = 8_388_608; // 8 MB
+const IMAGE_TYPES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+};
+
+type Scope = 'chat' | 'short' | 'video';
+
+/** What the stored bytes actually are, once `confirm` has sniffed them. */
+type ObjectKind = 'video' | 'image';
 
 type RequestBody = {
   action?: 'status' | 'put' | 'confirm' | 'get' | 'delete';
@@ -101,12 +130,45 @@ const expectKey = (value: unknown): string => {
   return key!;
 };
 
-const assertKeyScope = (scope: Scope, key: string, chatId: string | null, uid: string): void => {
+/**
+ * The caller's own spaces. `thumb/` is deliberately shared by both publish
+ * paths: a poster frame is an image, and neither `publish_video` nor
+ * `publish_short` accepts a thumbnail outside `thumb/<uid>/`.
+ */
+const ownPrefixes = (uid: string): string[] => [
+  `shorts/${uid}/`,
+  `video/${uid}/`,
+  `thumb/${uid}/`,
+];
+
+const isOwnKey = (key: string, uid: string): boolean => ownPrefixes(uid).some((p) => key.startsWith(p));
+
+/**
+ * Re-derives the expected prefix for an action. [kind] is only known after the
+ * bytes have been sniffed, so `confirm` passes it; `put` and `delete` know from
+ * the mime they are working with.
+ */
+const assertKeyScope = (
+  scope: Scope,
+  key: string,
+  chatId: string | null,
+  uid: string,
+  kind: ObjectKind | null = null,
+): void => {
+  if (kind === 'image') {
+    if (!key.startsWith(`thumb/${uid}/`)) {
+      throw new HttpError('bad_request', 'a poster frame must live in the caller\'s thumbnail space');
+    }
+    return;
+  }
   if (scope === 'chat') {
     if (!key.startsWith(`chat/${chatId}/`)) {
       throw new HttpError('bad_request', 'key does not belong to this chat');
     }
-  } else if (!key.startsWith(`shorts/${uid}/`)) {
+    return;
+  }
+  const expected = scope === 'video' ? `video/${uid}/` : `shorts/${uid}/`;
+  if (!key.startsWith(expected)) {
     throw new HttpError('bad_request', 'key does not belong to this account');
   }
 };
@@ -175,8 +237,8 @@ function handle(request: Request): Promise<Response> {
         status: 500,
       });
     }
-    if (body.scope !== 'chat' && body.scope !== 'short') {
-      throw new HttpError('bad_request', "scope must be 'chat' or 'short'");
+    if (body.scope !== 'chat' && body.scope !== 'short' && body.scope !== 'video') {
+      throw new HttpError('bad_request', "scope must be 'chat', 'short' or 'video'");
     }
     const scope: Scope = body.scope;
     const chatId = body.chatId == null ? null : String(body.chatId);
@@ -189,26 +251,44 @@ function handle(request: Request): Promise<Response> {
     switch (action) {
       case 'put': {
         await authorizeScope(userClient(env, token!), scope, caller.uid, chatId);
-        const mime = expectString(body.mime, 'mime', { max: 100 });
-        if (mime !== 'video/mp4') {
+        const mime = expectString(body.mime, 'mime', { max: 100 })!;
+        const imageExtension = IMAGE_TYPES[mime];
+        if (mime !== 'video/mp4' && imageExtension === undefined) {
           throw new HttpError(
             'bad_request',
-            'only video/mp4 is accepted (there is no transcoding pipeline)',
+            'only video/mp4, image/jpeg and image/png are accepted (there is no transcoding pipeline)',
           );
         }
-        expectInt(body.durationMs, 'durationMs', 1, MAX_DURATION_MS);
-        expectInt(body.sizeBytes, 'sizeBytes', 1, MAX_SIZE_BYTES);
+        if (imageExtension !== undefined && scope === 'chat') {
+          // A poster frame is a personal asset; uploaded into a chat's space it
+          // would be readable by that chat's members only, which is not what a
+          // feed thumbnail needs.
+          throw new HttpError('bad_request', 'image tickets are only minted for the personal key space');
+        }
+        const isLong = scope === 'video';
+        const sizeCap = imageExtension !== undefined
+          ? MAX_IMAGE_BYTES
+          : (isLong ? MAX_LONG_SIZE_BYTES : MAX_SIZE_BYTES);
+        if (imageExtension === undefined) {
+          expectInt(body.durationMs, 'durationMs', 1, isLong ? MAX_LONG_DURATION_MS : MAX_DURATION_MS);
+        }
+        expectInt(body.sizeBytes, 'sizeBytes', 1, sizeCap);
 
-        const prefix = scope === 'chat' ? `chat/${chatId}/app` : `shorts/${caller.uid}/app`;
-        const key = `${prefix}/${Date.now()}_${randomHex(4)}.mp4`;
+        const prefix = scope === 'chat'
+          ? `chat/${chatId}/app`
+          : imageExtension !== undefined
+          ? `thumb/${caller.uid}/app`
+          : (isLong ? `video/${caller.uid}/app` : `shorts/${caller.uid}/app`);
+        const extension = imageExtension ?? 'mp4';
+        const key = `${prefix}/${Date.now()}_${randomHex(4)}.${extension}`;
         const url = await presignS3(s3, {
           method: 'PUT',
           key,
           expiresInSeconds: PUT_EXPIRES_SECONDS,
         });
-        log.info('video put ticket', { uid: caller.uid, scope, key });
+        log.info('upload ticket', { uid: caller.uid, scope, key, mime });
         return ok(
-          { key, url, expiresInSeconds: PUT_EXPIRES_SECONDS, contentType: 'video/mp4' },
+          { key, url, expiresInSeconds: PUT_EXPIRES_SECONDS, contentType: mime },
           cors,
         );
       }
@@ -216,7 +296,6 @@ function handle(request: Request): Promise<Response> {
       case 'confirm': {
         await authorizeScope(userClient(env, token!), scope, caller.uid, chatId);
         const key = expectKey(body.key);
-        assertKeyScope(scope, key, chatId, caller.uid);
 
         const head = await signS3Request(s3, { method: 'HEAD', key });
         const headResponse = await fetch(head.url, { method: 'HEAD', headers: head.headers });
@@ -231,11 +310,36 @@ function handle(request: Request): Promise<Response> {
         if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
           throw new HttpError('upstream_error', 'the upload reported no size');
         }
-        if (sizeBytes > MAX_SIZE_BYTES) {
+
+        // What the bytes are decides which cap applies and what the client is
+        // allowed to write into the database.
+        const kind = await sniffKind(s3, key);
+        if (kind === null) {
+          await deleteObject(s3, key);
+          throw new HttpError('bad_request', 'that file is not an MP4 video, a JPEG or a PNG');
+        }
+        // The bytes decide the space they are allowed to have come from.
+        assertKeyScope(scope, key, chatId, caller.uid, kind);
+
+        if (kind === 'image') {
+          if (scope === 'chat') {
+            await deleteObject(s3, key);
+            throw new HttpError('bad_request', 'a chat never holds an image object of its own');
+          }
+          if (sizeBytes > MAX_IMAGE_BYTES) {
+            await deleteObject(s3, key);
+            throw new HttpError('payload_too_large', `images must stay under ${MAX_IMAGE_BYTES} bytes`);
+          }
+          log.info('image confirmed', { uid: caller.uid, scope, key, sizeBytes });
+          return ok({ key, sizeBytes, durationMs: 0, kind, contentType: 'image' }, cors);
+        }
+
+        const sizeCap = scope === 'video' ? MAX_LONG_SIZE_BYTES : MAX_SIZE_BYTES;
+        if (sizeBytes > sizeCap) {
           await deleteObject(s3, key);
           throw new HttpError(
             'payload_too_large',
-            `videos must stay under ${MAX_SIZE_BYTES} bytes`,
+            `videos must stay under ${sizeCap} bytes`,
           );
         }
 
@@ -247,25 +351,36 @@ function handle(request: Request): Promise<Response> {
           await deleteObject(s3, key);
           throw new HttpError('bad_request', 'that file could not be read as an MP4 video');
         }
-        if (durationMs > MAX_DURATION_MS) {
+        const durationCap = scope === 'video' ? MAX_LONG_DURATION_MS : MAX_DURATION_MS;
+        if (durationMs > durationCap) {
           await deleteObject(s3, key);
-          throw new HttpError('payload_too_large', `videos must stay under ${MAX_DURATION_MS} ms`);
+          throw new HttpError('payload_too_large', `videos must stay under ${durationCap} ms`);
         }
 
         log.info('video confirmed', { uid: caller.uid, scope, key, sizeBytes, durationMs });
-        return ok({ key, sizeBytes, durationMs, contentType: 'video/mp4' }, cors);
+        return ok({ key, sizeBytes, durationMs, kind, contentType: 'video/mp4' }, cors);
       }
 
       case 'get': {
         const key = expectKey(body.key);
-        assertKeyScope(scope, key, chatId, caller.uid);
+        const asUser = userClient(env, token!);
         if (scope === 'chat') {
+          assertKeyScope(scope, key, chatId, caller.uid);
           if (chatId === null) {
             throw new HttpError('bad_request', 'chatId is required for a chat ticket');
           }
           // Watching needs membership, not posting standing: a restricted
           // account still reads its own chats, exactly like message RLS.
-          await requireChatMember(userClient(env, token!), caller.uid, chatId);
+          await requireChatMember(asUser, caller.uid, chatId);
+        } else if (!isOwnKey(key, caller.uid)) {
+          // Somebody else's key: allowed only when the database says a row the
+          // caller may see references it. This is what lets a feed play, and it
+          // keeps a private account's unpublished uploads unreadable.
+          const { data, error } = await asUser.rpc('media_visible', { p_key: key });
+          if (error) throw new HttpError('upstream_error', 'could not check that object');
+          if (data !== true) {
+            throw new HttpError('forbidden', 'that object is not available to you');
+          }
         }
         const url = await presignS3(s3, {
           method: 'GET',
@@ -282,21 +397,14 @@ function handle(request: Request): Promise<Response> {
         const asUser = userClient(env, token!);
 
         // Attached media is not removable from here — deleting the object
-        // under a live message or short would break playback for everyone.
-        // delete_message + the runbook's orphan sweep own that lifecycle.
-        const referenced = scope === 'chat'
-          ? await asUser
-            .from('messages')
-            .select('id')
-            .eq('chat_id', chatId!)
-            .is('deleted_at', null)
-            .contains('media', { key })
-            .limit(1)
-          : await asUser.from('shorts').select('id').eq('object_key', key).limit(1);
+        // under a live message, video or short would break playback for
+        // everyone. delete_message + the runbook's orphan sweep own that
+        // lifecycle.
+        const referenced = await findReference(asUser, scope, chatId, key);
         if (referenced.error) {
           throw new HttpError('upstream_error', 'could not check the object reference');
         }
-        if ((referenced.data ?? []).length > 0) {
+        if (referenced.data.length > 0) {
           throw new HttpError(
             'forbidden',
             'that video is attached to a message; delete the message instead',
@@ -315,6 +423,42 @@ function handle(request: Request): Promise<Response> {
   }, (req) => corsHeaders(req.headers.get('origin'), env.allowedOrigins))(request);
 }
 
+/**
+ * Is this object referenced by a live row? A poster key can be referenced by a
+ * long video *or* a short, so the check follows the key, not the scope the
+ * caller happened to declare.
+ */
+async function findReference(
+  client: AdminClient,
+  scope: Scope,
+  chatId: string | null,
+  key: string,
+): Promise<{ data: unknown[]; error: unknown }> {
+  if (scope === 'chat') {
+    const rows = await client
+      .from('messages')
+      .select('id')
+      .eq('chat_id', chatId!)
+      .is('deleted_at', null)
+      .contains('media', { key })
+      .limit(1);
+    return { data: rows.data ?? [], error: rows.error };
+  }
+  if (key.startsWith('thumb/')) {
+    const [videos, shorts] = await Promise.all([
+      client.from('videos').select('id').eq('thumbnail_key', key).limit(1),
+      client.from('shorts').select('id').eq('thumbnail_key', key).limit(1),
+    ]);
+    return {
+      data: [...(videos.data ?? []), ...(shorts.data ?? [])],
+      error: videos.error ?? shorts.error,
+    };
+  }
+  const table = scope === 'video' ? 'videos' : 'shorts';
+  const rows = await client.from(table).select('id').eq('object_key', key).limit(1);
+  return { data: rows.data ?? [], error: rows.error };
+}
+
 async function deleteObject(s3: S3Config, key: string): Promise<boolean> {
   const signed = await signS3Request(s3, { method: 'DELETE', key });
   const response = await fetch(signed.url, { method: 'DELETE', headers: signed.headers });
@@ -328,6 +472,31 @@ async function deleteObject(s3: S3Config, key: string): Promise<boolean> {
  * it cannot be proven. The reader keeps every fetch to a bounded window: the
  * `mdat` of a 250 MB clip is never downloaded to answer a question about it.
  */
+/**
+ * What the stored object actually is, from its first bytes: `ftyp` means MP4,
+ * the JPEG and PNG signatures mean a poster frame, anything else is rejected.
+ * The client's declared mime is a hint; this is the fact, and it is what makes
+ * the caps enforceable per kind.
+ */
+async function sniffKind(s3: S3Config, key: string): Promise<ObjectKind | null> {
+  const signed = await signS3Request(s3, { method: 'GET', key });
+  const response = await fetch(signed.url, {
+    method: 'GET',
+    headers: { ...signed.headers, range: 'bytes=0-15' },
+  });
+  if (response.status !== 206 && !response.ok) return null;
+  const head = new Uint8Array(await response.arrayBuffer()).subarray(0, 16);
+  if (head.length >= 8 &&
+      head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70) {
+    return 'video';
+  }
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image';
+  if (head.length >= 8 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) {
+    return 'image';
+  }
+  return null;
+}
+
 async function verifiedDurationMs(
   s3: S3Config,
   key: string,

@@ -3,11 +3,18 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/env.dart';
 import '../data/account_repository.dart';
+import '../data/bot_repository.dart';
 import '../data/chat_repository.dart';
+import '../data/community_repository.dart';
+import '../data/economy_repository.dart';
+import '../data/feed_repository.dart';
+import '../data/media_cache.dart';
 import '../data/push_repository.dart';
 import '../data/shorts_repository.dart';
+import '../data/social_repository.dart';
 import '../data/telegram_repository.dart';
 import '../data/video_repository.dart';
+import '../data/voice_over.dart';
 import '../data/voice_service.dart';
 
 /// Composition root.
@@ -42,6 +49,18 @@ void registerDependencies({required AppEnv env, required SupabaseClient client})
     ..registerLazySingleton<PushRepository>(
       () => PushRepository(client, pushConfigUrl: env.functionsPath('web-push-send').toString()),
     )
+    // The feed side of the product: the video graph (00021), the social graph
+    // (00020), the economy (00025), communities (00023) and the bot platform
+    // (00026). Each is a thin RPC client over its own migration.
+    ..registerLazySingleton<FeedRepository>(() => FeedRepository(client))
+    ..registerLazySingleton<SocialRepository>(() => SocialRepository(client))
+    ..registerLazySingleton<EconomyRepository>(() => EconomyRepository(client))
+    ..registerLazySingleton<CommunityRepository>(() => CommunityRepository(client))
+    ..registerLazySingleton<BotRepository>(() => BotRepository(client))
+    // Signed URLs live behind one cache so a poster, a bubble and a reel that
+    // point at the same key share a single presign.
+    ..registerLazySingleton<MediaCache>(() => MediaCache(sl<VideoRepository>()))
+    ..registerLazySingleton<VoiceOverService>(VoiceOverService.new)
     ..registerLazySingleton<VoiceService>(VoiceService.new)
     ..registerLazySingleton<VoicePlayer>(VoicePlayer.new);
 }
@@ -52,5 +71,6 @@ void registerDependencies({required AppEnv env, required SupabaseClient client})
 Future<void> disposeDependencies() async {
   if (sl.isRegistered<VoiceService>()) await sl<VoiceService>().dispose();
   if (sl.isRegistered<VoicePlayer>()) await sl<VoicePlayer>().dispose();
+  if (sl.isRegistered<VoiceOverService>()) sl<VoiceOverService>().dispose();
   await sl.reset();
 }

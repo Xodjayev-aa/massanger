@@ -10,8 +10,10 @@ import '../../data/telegram_repository.dart';
 import 'chats_bloc.dart';
 import 'widgets.dart';
 
-/// The chat list. It doubles as the app's home: the Telegram bridge status lives in
-/// the app bar, and the unread total is the number the user actually cares about.
+/// The Messages tab: chats, the Telegram bridge status, and the way into the
+/// three places a conversation can live (a community, a broadcast channel, a
+/// bot). The video product has its own tab; this one is only ever about people
+/// talking to you.
 class ChatsPage extends StatelessWidget {
   const ChatsPage({super.key});
 
@@ -19,24 +21,24 @@ class ChatsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MessengerX'),
+        title: const Text('Messages'),
         actions: <Widget>[
           IconButton(
-            tooltip: 'Shorts',
-            icon: const Icon(Icons.smart_display_outlined),
-            onPressed: () => context.push(Routes.shorts),
+            tooltip: 'Search messages',
+            icon: const Icon(Icons.search_rounded),
+            onPressed: () => context.push(Routes.chatSearch),
           ),
           IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search_rounded),
-            onPressed: () => context.push(Routes.search),
+            tooltip: 'Your communities',
+            icon: const Icon(Icons.groups_rounded),
+            onPressed: () => context.push(Routes.communities),
+          ),
+          IconButton(
+            tooltip: 'Bots',
+            icon: const Icon(Icons.smart_toy_outlined),
+            onPressed: () => context.push(Routes.bots),
           ),
           const _TelegramAction(),
-          IconButton(
-            tooltip: 'You',
-            icon: const Icon(Icons.account_circle_rounded),
-            onPressed: () => context.push(Routes.profile),
-          ),
           const SizedBox(width: 4),
         ],
       ),

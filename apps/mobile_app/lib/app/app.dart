@@ -116,22 +116,27 @@ class _MessengerXAppState extends State<MessengerXApp> with WidgetsBindingObserv
       child: BlocBuilder<AuthBloc, AuthUiState>(
         buildWhen: (previous, next) => previous.status != next.status,
         builder: (context, state) {
-          return MaterialApp.router(
-            title: 'MessengerX',
-            debugShowCheckedModeBanner: false,
-            theme: AppTheme.light(),
-            darkTheme: AppTheme.dark(),
-            themeMode: ThemeMode.system,
-            routerConfig: _router,
-            builder: (context, child) => IncomingNotices(
-              auth: _auth,
-              chats: _chats,
-              telegram: sl<TelegramRepository>(),
-              client: sl<SupabaseClient>(),
-              child: _coldStartCover(
-                context,
-                child,
-                covered: state.status == AppStatus.unknown,
+          // One listenable, one rebuild: the router itself is built once above,
+          // so switching theme never costs the navigation stack.
+          return ValueListenableBuilder<ThemeMode>(
+            valueListenable: appThemeMode,
+            builder: (context, mode, child) => MaterialApp.router(
+              title: 'MessengerX',
+              debugShowCheckedModeBanner: false,
+              theme: AppTheme.light(),
+              darkTheme: AppTheme.dark(),
+              themeMode: mode,
+              routerConfig: _router,
+              builder: (context, child) => IncomingNotices(
+                auth: _auth,
+                chats: _chats,
+                telegram: sl<TelegramRepository>(),
+                client: sl<SupabaseClient>(),
+                child: _coldStartCover(
+                  context,
+                  child,
+                  covered: state.status == AppStatus.unknown,
+                ),
               ),
             ),
           );

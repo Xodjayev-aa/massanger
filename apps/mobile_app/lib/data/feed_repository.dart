@@ -47,6 +47,31 @@ class FeedRepository {
     }
   }
 
+  /// One creator's long-form catalogue, in the same row shape as [videos] so a
+  /// channel grid and the home grid share a tile. [includePrivate] adds the
+  /// caller's own drafts and unlisted uploads, which is what the Profile tab
+  /// wants and a stranger's channel page must not get.
+  Future<List<VideoCard>> authorVideos(
+    String authorId, {
+    DateTime? beforeAt,
+    String? beforeId,
+    int limit = videoPageSize,
+    bool includePrivate = false,
+  }) async {
+    try {
+      final rows = await _client.rpc('author_videos', params: <String, Object?>{
+        'p_author_id': authorId,
+        'p_before_at': beforeAt?.toUtc().toIso8601String(),
+        'p_before_id': beforeId,
+        'p_limit': limit,
+        'p_include_private': includePrivate,
+      });
+      return asMapList(rows).map(VideoCard.fromMap).toList(growable: false);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
   /// The watch page payload: video, author, chapters, sound and counts in one
   /// round trip.
   Future<Map<String, dynamic>> video(String videoId) async {
@@ -212,6 +237,105 @@ class FeedRepository {
     }
   }
 
+  /// The category chips under the tabs: slug, label and how much is in there.
+  Future<List<VideoCategory>> categories() async {
+    try {
+      final rows = await _client.rpc('video_categories_list');
+      return asMapList(rows)
+          .map((row) => VideoCategory(
+                slug: '${row['slug']}',
+                label: '${row['label']}',
+                emoji: row['emoji'] as String?,
+                videoCount: (row['video_count'] as num?)?.toInt() ?? 0,
+              ))
+          .toList(growable: false);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  /// Trending hashtags, for the search page and the composer's suggestions.
+  Future<List<({String tag, int useCount, int recentCount})>> trendingHashtags({int limit = 24}) async {
+    try {
+      final rows = await _client.rpc('hashtag_trending', params: {'p_limit': limit});
+      return asMapList(rows)
+          .map((row) => (
+                tag: '${row['tag']}',
+                useCount: (row['use_count'] as num?)?.toInt() ?? 0,
+                recentCount: (row['recent_count'] as num?)?.toInt() ?? 0,
+              ))
+          .toList(growable: false);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  /// The creator dashboard: totals over both engines plus the top rows.
+  Future<Map<String, dynamic>> creatorStats() async {
+    try {
+      final data = await _client.rpc('creator_stats');
+      return asMap(data);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // playlists
+  // ---------------------------------------------------------------------------
+
+  Future<String> createPlaylist(String title, {String? description, String visibility = 'private'}) async {
+    try {
+      final id = await _client.rpc('playlist_create', params: <String, Object?>{
+        'p_title': title,
+        'p_description': description,
+        'p_visibility': visibility,
+      });
+      return '$id';
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  Future<void> deletePlaylist(String playlistId) async {
+    try {
+      await _client.rpc('playlist_delete', params: {'p_playlist_id': playlistId});
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  Future<void> addToPlaylist(String playlistId, String videoId) async {
+    try {
+      await _client.rpc('playlist_add', params: <String, Object?>{
+        'p_playlist_id': playlistId,
+        'p_video_id': videoId,
+      });
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  Future<void> removeFromPlaylist(String playlistId, String videoId) async {
+    try {
+      await _client.rpc('playlist_remove', params: <String, Object?>{
+        'p_playlist_id': playlistId,
+        'p_video_id': videoId,
+      });
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
+  Future<List<VideoCard>> playlistItems(String playlistId) async {
+    try {
+      final rows = await _client.rpc('playlist_items', params: {'p_playlist_id': playlistId});
+      return asMapList(rows).map(VideoCard.fromMap).toList(growable: false);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // comments
   // ---------------------------------------------------------------------------
@@ -330,6 +454,19 @@ class FeedRepository {
     }
   }
 
+  /// One short by id, for a share link, a notification tap or the single-reel
+  /// page. Null means "the server did not let this caller see it", which the UI
+  /// shows as a plain "not available" — never as an error.
+  Future<ShortCard?> short(String shortId) async {
+    try {
+      final rows = await _client.rpc('short_detail', params: {'p_short_id': shortId});
+      final list = asMapList(rows);
+      return list.isEmpty ? null : ShortCard.fromMap(list.first);
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
   Future<String> publishShort({
     required String objectKey,
     required Duration duration,
@@ -395,6 +532,10 @@ class FeedRepository {
       throw AppException.wrap(error, stack);
     }
   }
+
+  /// The bookmark on a short. `rate_short(kind: 'save')` is the server's one
+  /// write path for both counters, so the client never touches `short_saves`.
+  Future<bool> toggleSaveShort(String shortId) => rateShort(shortId, kind: 'save');
 
   Future<void> shareShort(String shortId) async {
     try {
