@@ -6,7 +6,6 @@ import '../../app/router.dart';
 import '../../core/errors.dart';
 import '../../core/formatting.dart';
 import '../../data/models.dart';
-import '../../data/telegram_repository.dart';
 import 'chats_bloc.dart';
 import 'widgets.dart';
 
@@ -71,15 +70,11 @@ class _ChatsPageState extends State<ChatsPage> with SingleTickerProviderStateMix
             ),
           ],
         ),
-        actions: <Widget>[
-          const _TelegramAction(),
-          const SizedBox(width: 8),
-        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => context.push(Routes.newChat()),
         icon: const Icon(Icons.edit_rounded),
-        label: Text(_tabController.index == 0 ? 'New chat' : 'New channel'),
+        label: const Text('New chat'),
       ),
       body: SafeArea(
         child: TabBarView(
@@ -144,68 +139,6 @@ String _failureText(Object? error) {
   final wrapped = error;
   if (wrapped is AppException) return wrapped.message;
   return 'Could not load your chats.';
-}
-
-class _TelegramAction extends StatefulWidget {
-  const _TelegramAction();
-
-  @override
-  State<_TelegramAction> createState() => _TelegramActionState();
-}
-
-class _TelegramActionState extends State<_TelegramAction> {
-  String? _authState;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
-  }
-
-  Future<void> _refresh() async {
-    try {
-      final status = await context.read<TelegramRepository>().status();
-      if (mounted) setState(() => _authState = status.authState);
-    } catch (_) {
-      // The badge is decoration; a failure here must not show anything alarming.
-    }
-  }
-
-  String get _tooltip {
-    return switch (_authState) {
-      'linked' => 'Telegram — linked',
-      'syncing' => 'Telegram — syncing',
-      'needs_reauth' => 'Telegram — sign in again',
-      'revoked' => 'Telegram — disconnected',
-      'failed' => 'Telegram — bridge error',
-      'unlinked' => 'Telegram — not linked',
-      null => 'Telegram',
-      _ => 'Telegram — ${_authState!}',
-    };
-  }
-
-  bool get _needsAttention {
-    final state = _authState;
-    if (state == null) return false;
-    return state != 'linked' && state != 'unlinked';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: _tooltip,
-      onPressed: () async {
-        await context.push(Routes.telegram);
-        if (context.mounted) await _refresh();
-      },
-      icon: Badge(
-        isLabelVisible: _needsAttention,
-        label: const Text('!'),
-        backgroundColor: Theme.of(context).colorScheme.error,
-        child: TelegramBadge(authState: _authState, compact: true),
-      ),
-    );
-  }
 }
 
 class ChatTile extends StatelessWidget {
@@ -321,7 +254,7 @@ class _EmptyList extends StatelessWidget {
           hasQuery
               ? 'Try searching from the universal search bar.'
               : isServerView
-                  ? 'Create a #channel to start a Discord-style server.'
+                  ? 'Community group channels will appear here.'
                   : 'Start a direct chat, or link Telegram in Settings to mirror your conversations.',
           textAlign: TextAlign.center,
           style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),

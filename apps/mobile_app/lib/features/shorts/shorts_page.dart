@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../app/di.dart';
@@ -110,36 +110,6 @@ class _ShortsPageState extends State<ShortsPage> {
     if (index >= _items.length - 3) _loadMore();
   }
 
-  Future<void> _create() async {
-    if (_configured == false) {
-      _show('Video is not enabled on this deployment.');
-      return;
-    }
-    try {
-      final picked = await ImagePicker().pickVideo(
-        source: ImageSource.gallery,
-        maxDuration: const Duration(seconds: 60),
-      );
-      if (picked == null || !mounted) return;
-      final caption = await showDialog<String>(
-        context: context,
-        builder: (dialogContext) => _ShortCaptionDialog(fileName: picked.name),
-      );
-      final created = await _shorts.publish(file: picked, caption: caption);
-      if (_disposed) return;
-      setState(() {
-        _items.insert(0, created);
-        _index = 0;
-        _hasMore = true;
-      });
-      if (_page.hasClients) _page.jumpToPage(0);
-    } on AppException catch (error) {
-      _show(error.message);
-    } catch (_) {
-      _show('That video could not be published.');
-    }
-  }
-
   Future<void> _toggleLike(int index) async {
     if (index < 0 || index >= _items.length) return;
     final short = _items[index];
@@ -170,23 +140,17 @@ class _ShortsPageState extends State<ShortsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final canPop = context.canPop();
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Stack(
           children: <Widget>[
             Positioned.fill(child: _body()),
-            const _BackButton(),
+            if (canPop) const _BackButton(),
           ],
         ),
       ),
-      floatingActionButton: _configured == false
-          ? null
-          : FloatingActionButton(
-              onPressed: _create,
-              tooltip: 'Post a short',
-              child: const Icon(Icons.add_rounded),
-            ),
     );
   }
 
@@ -474,47 +438,19 @@ class _ShortViewState extends State<_ShortView> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                // Comment affordance
+                // Share / copy video link affordance
                 IconButton(
-                  tooltip: 'Comments',
-                  onPressed: () {
-                    showModalBottomSheet<void>(
-                      context: context,
-                      backgroundColor: const Color(0xFF1E1F22),
-                      shape: const RoundedRectangleBorder(
-                        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-                      ),
-                      builder: (sheetContext) => SafeArea(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              const Text('Comments', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                              const SizedBox(height: 16),
-                              const Text('Be the first to comment on this short!', style: TextStyle(color: Colors.white70)),
-                              const SizedBox(height: 16),
-                            ],
-                          ),
-                        ),
-                      ),
+                  tooltip: 'Copy video link',
+                  onPressed: () async {
+                    final link = DiscordMarkdown.shareVideoUrl(widget.short.id);
+                    await Clipboard.setData(ClipboardData(text: link));
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Video link copied to clipboard.')),
                     );
                   },
                   icon: const Icon(
-                    Icons.chat_bubble_rounded,
-                    color: Colors.white,
-                    shadows: <Shadow>[Shadow(blurRadius: 8, color: Colors.black54)],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                // Share to Telegram / Discord affordance
-                IconButton(
-                  tooltip: 'Share',
-                  onPressed: () {
-                    context.push(Routes.chats);
-                  },
-                  icon: const Icon(
-                    Icons.send_rounded,
+                    Icons.share_rounded,
                     color: Colors.white,
                     shadows: <Shadow>[Shadow(blurRadius: 8, color: Colors.black54)],
                   ),
@@ -524,49 +460,6 @@ class _ShortViewState extends State<_ShortView> {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _ShortCaptionDialog extends StatefulWidget {
-  const _ShortCaptionDialog({required this.fileName});
-
-  final String fileName;
-
-  @override
-  State<_ShortCaptionDialog> createState() => _ShortCaptionDialogState();
-}
-
-class _ShortCaptionDialogState extends State<_ShortCaptionDialog> {
-  final TextEditingController _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        maxLength: 500,
-        maxLines: 3,
-        decoration: const InputDecoration(hintText: 'Add a caption (optional)', counterText: ''),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Post without caption'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
-          child: const Text('Post'),
-        ),
-      ],
     );
   }
 }

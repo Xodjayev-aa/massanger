@@ -13,7 +13,6 @@ import '../../data/chat_repository.dart';
 import '../../data/models.dart';
 import '../../data/shorts_repository.dart';
 import '../auth/auth_bloc.dart';
-import '../shorts/video_player_screen.dart';
 import 'widgets.dart';
 
 /// Universal Autocomplete Search:
@@ -233,11 +232,9 @@ class _UniversalSearchPageState extends State<UniversalSearchPage> with SingleTi
       title: Text(video.title ?? video.caption ?? 'Untitled', maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text('${video.authorName ?? '@creator'} • ${ChatFormatting.duration(video.duration)}', style: const TextStyle(fontSize: 12)),
       trailing: video.isLong
-          ? const Chip(label: Text('16:9 Video', style: TextStyle(fontSize: 10)))
+          ? const Chip(label: Text('Video', style: TextStyle(fontSize: 10)))
           : const Chip(label: Text('Short', style: TextStyle(fontSize: 10))),
-      onTap: () {
-        Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => VideoPlayerScreen(video: video)));
-      },
+      onTap: () => context.push(Routes.video(video.id), extra: video),
     );
   }
 

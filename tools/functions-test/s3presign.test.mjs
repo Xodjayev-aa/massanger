@@ -89,6 +89,23 @@ describe('s3_presign presigned URLs', () => {
     );
     assert.ok(url.href.includes('X-Amz-Credential=00221133445566778899aabbccddeeff%2F20260928%2F'));
   });
+
+  it('signs response-content-disposition for attachment downloads', async () => {
+    const plain = await presignS3(CFG, { method: 'GET', key: KEY, expiresInSeconds: 3600, now: NOW });
+    const attachment = await presignS3(CFG, {
+      method: 'GET',
+      key: KEY,
+      expiresInSeconds: 3600,
+      responseContentDisposition: 'attachment; filename="clip.mp4"',
+      now: NOW,
+    });
+    const parsed = new URL(attachment);
+    assert.equal(parsed.searchParams.get('response-content-disposition'), 'attachment; filename="clip.mp4"');
+    assert.notEqual(
+      parsed.searchParams.get('X-Amz-Signature'),
+      new URL(plain).searchParams.get('X-Amz-Signature'),
+    );
+  });
 });
 
 describe('s3_presign header-authenticated requests', () => {

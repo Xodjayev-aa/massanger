@@ -1,22 +1,36 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
+import 'package:uuid/uuid.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../app/di.dart';
+import '../../app/router.dart';
 import '../../core/discord_markdown.dart';
+import '../../core/errors.dart';
 import '../../core/formatting.dart';
+import '../../core/url_strategy.dart';
+import '../../data/chat_repository.dart';
+import '../../data/models.dart';
 import '../../data/shorts_repository.dart';
+import '../auth/auth_bloc.dart';
+import '../chats/chats_bloc.dart';
+import '../chats/widgets.dart';
 
-/// Full YouTube-style theater video player screen:
-/// - Inline scrubber, speed selector (0.5x, 1x, 1.5x, 2x), landscape toggle
-/// - Video details & expandable description with markdown & #hashtags
-/// - Action bar: Like, Share, Save, Remix
-/// - Creator row with Subscribe / Follow button and Discord role tag
-/// - YouTube/TikTok-style comments sheet with real comments
+/// Video player screen supporting both direct [video] instances and `/video/:id`
+/// route navigation via [videoId].
 class VideoPlayerScreen extends StatefulWidget {
-  const VideoPlayerScreen({super.key, required this.video});
+  const VideoPlayerScreen({
+    super.key,
+    this.video,
+    this.videoId,
+  });
 
-  final ShortVideo video;
+  final ShortVideo? video;
+  final String? videoId;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -24,7 +38,9 @@ class VideoPlayerScreen extends StatefulWidget {
 
 class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   final ShortsRepository _shorts = sl<ShortsRepository>();
+  ShortVideo? _video;
   VideoPlayerController? _controller;
+  bool _loadingVideo = false;
   bool _isPlaying = false;
   bool _isMuted = false;
   bool _liked = false;
@@ -32,42 +48,106 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   double _speed = 1.0;
   bool _controlsVisible = true;
   bool _descriptionExpanded = false;
+  bool _downloading = false;
   Object? _error;
 
   @override
   void initState() {
     super.initState();
-    _liked = widget.video.likedByMe;
-    _likes = widget.video.likeCount;
-    _initPlayer();
-    _shorts.recordView(widget.video.id);
+    unawaited(_bootstrap());
   }
 
-  Future<void> _initPlayer() async {
+  Future<void> _bootstrap() async {
+    final initial = widget.video;
+    if (initial != null) {
+      _applyVideo(initial);
+      await _initPlayer(initial);
+      return;
+    }
+
+    final targetId = widget.videoId?.trim() ?? '';
+    if (targetId.isEmpty) {
+      setState(() => _error = const AppException('not_found', 'Video not found.'));
+      return;
+    }
+
+    setState(() {
+      _loadingVideo = true;
+      _error = null;
+    });
     try {
-      final url = await _shorts.watchUrl(widget.video);
-      final controller = VideoPlayerController.networkUrl(Uri.parse(url));
-      await controller.initialize();
-      if (!mounted) {
-        await controller.dispose();
+      final loaded = await _shorts.getById(targetId);
+      if (!mounted) return;
+      if (loaded == null) {
+        setState(() {
+          _loadingVideo = false;
+          _error = const AppException('not_found', 'Video not found.');
+        });
         return;
       }
+      _applyVideo(loaded);
+      setState(() => _loadingVideo = false);
+      await _initPlayer(loaded);
+    } catch (e) {
+      if (!mounted) return;
       setState(() {
-        _controller = controller;
+        _loadingVideo = false;
+        _error = e;
+      });
+    }
+  }
+
+  void _applyVideo(ShortVideo video) {
+    _video = video;
+    _liked = video.likedByMe;
+    _likes = video.likeCount;
+    unawaited(_shorts.recordView(video.id));
+  }
+
+  Future<void> _initPlayer(ShortVideo video) async {
+    VideoPlayerController? fresh;
+    try {
+      final url = await _shorts.watchUrl(video);
+      fresh = VideoPlayerController.networkUrl(Uri.parse(url));
+      await fresh.initialize();
+      if (!mounted) return;
+      fresh.addListener(_onPlayerTick);
+      final old = _controller;
+      _controller = fresh;
+      fresh = null;
+      await old?.dispose();
+      setState(() {
         _isPlaying = true;
+        _error = null;
       });
-      await controller.play();
-      controller.addListener(() {
-        if (mounted) setState(() {});
-      });
+      await _controller?.play();
     } catch (e) {
       if (mounted) setState(() => _error = e);
+    } finally {
+      try {
+        await fresh?.dispose();
+      } catch (_) {}
+    }
+  }
+
+  void _onPlayerTick() {
+    final c = _controller;
+    if (!mounted || c == null) return;
+    final playing = c.value.isPlaying;
+    if (playing != _isPlaying) {
+      setState(() => _isPlaying = playing);
+    } else {
+      setState(() {});
     }
   }
 
   @override
   void dispose() {
-    _controller?.dispose();
+    final c = _controller;
+    if (c != null) {
+      c.removeListener(_onPlayerTick);
+      unawaited(c.dispose());
+    }
     super.dispose();
   }
 
@@ -75,15 +155,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     final c = _controller;
     if (c == null) return;
     if (c.value.isPlaying) {
-      c.pause();
+      unawaited(c.pause());
       setState(() => _isPlaying = false);
     } else {
-      c.play();
+      unawaited(c.play());
       setState(() => _isPlaying = true);
     }
   }
 
   Future<void> _toggleLike() async {
+    final video = _video;
+    if (video == null) return;
     final next = !_liked;
     setState(() {
       _liked = next;
@@ -91,12 +173,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     });
     try {
       if (next) {
-        await _shorts.like(widget.video.id);
+        await _shorts.like(video.id);
       } else {
-        await _shorts.unlike(widget.video.id);
+        await _shorts.unlike(video.id);
       }
     } catch (_) {
-      // rollback
       if (mounted) {
         setState(() {
           _liked = !next;
@@ -107,22 +188,182 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   void _cycleSpeed() {
-    final speeds = <double>[0.5, 1.0, 1.25, 1.5, 2.0];
+    const speeds = <double>[0.5, 1.0, 1.25, 1.5, 2.0];
     final nextIndex = (speeds.indexOf(_speed) + 1) % speeds.length;
     final nextSpeed = speeds[nextIndex];
     setState(() => _speed = nextSpeed);
-    _controller?.setPlaybackSpeed(nextSpeed);
+    unawaited(_controller?.setPlaybackSpeed(nextSpeed) ?? Future<void>.value());
+  }
+
+  Future<void> _downloadVideo() async {
+    final video = _video;
+    if (video == null || _downloading) return;
+    setState(() => _downloading = true);
+    try {
+      final url = await _shorts.downloadUrl(video);
+      if (!mounted) return;
+      final opened = openBrowserDownloadUrl(url);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            opened
+                ? 'Download started in your browser.'
+                : 'Direct download is only supported in the web browser.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppException.wrap(e).message)),
+      );
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  Future<void> _shareVideo() async {
+    final video = _video;
+    if (video == null) return;
+    final link = DiscordMarkdown.shareVideoUrl(video.id);
+    final label = video.title ?? video.caption ?? 'Video';
+    final chats = context.read<ChatsBloc>().state.chats;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Text(
+                'Share Video',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.link_rounded),
+              title: const Text('Copy video link'),
+              subtitle: Text(link, maxLines: 1, overflow: TextOverflow.ellipsis),
+              onTap: () async {
+                await Clipboard.setData(ClipboardData(text: link));
+                if (!sheetContext.mounted) return;
+                Navigator.of(sheetContext).pop();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Video link copied to clipboard.')),
+                );
+              },
+            ),
+            const Divider(height: 1),
+            if (chats.isEmpty)
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline_rounded),
+                title: const Text('Start a chat to share'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  context.push(Routes.newChat());
+                },
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: chats.length,
+                  itemBuilder: (itemContext, index) {
+                    final chat = chats[index];
+                    return ListTile(
+                      leading: PersonAvatar(
+                        name: chat.displayName,
+                        path: chat.avatar ?? chat.peerAvatarPath,
+                        size: 36,
+                      ),
+                      title: Text(
+                        chat.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: const Text('Send video link in chat'),
+                      onTap: () async {
+                        Navigator.of(sheetContext).pop();
+                        await _sendVideoToChat(chat, '$label\n$link');
+                      },
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _sendVideoToChat(ChatSummary chat, String body) async {
+    final uid = context.read<AuthBloc>().state.userId;
+    if (uid == null || uid.isEmpty) return;
+    try {
+      await sl<ChatRepository>().send(
+        chatId: chat.chatId,
+        kind: MessageKind.text,
+        clientMessageId: const Uuid().v4(),
+        currentUserId: uid,
+        body: body,
+      );
+      if (!mounted) return;
+      context.read<ChatsBloc>().add(const ChatsRefreshRequested());
+      context.push(Routes.chat(chat.chatId));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppException.wrap(e).message)),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final scheme = Theme.of(context).colorScheme;
+    final video = _video;
     final c = _controller;
+
+    if (_loadingVideo) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Video')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (video == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Video')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  _error != null ? AppException.wrap(_error!).message : 'Video not found.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                FilledButton.tonal(
+                  onPressed: _bootstrap,
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.video.title ?? 'Video Player', maxLines: 1),
+        title: Text(video.title ?? video.caption ?? 'Video', maxLines: 1),
         actions: <Widget>[
           TextButton(
             onPressed: _cycleSpeed,
@@ -133,7 +374,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             onPressed: () {
               final next = !_isMuted;
               setState(() => _isMuted = next);
-              c?.setVolume(next ? 0 : 1);
+              unawaited(c?.setVolume(next ? 0 : 1) ?? Future<void>.value());
             },
           ),
         ],
@@ -150,10 +391,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   Container(
                     color: Colors.black,
                     child: c != null && c.value.isInitialized
-                        ? Center(child: AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c)))
+                        ? Center(
+                            child: AspectRatio(
+                              aspectRatio: c.value.aspectRatio <= 0 ? 16 / 9 : c.value.aspectRatio,
+                              child: VideoPlayer(c),
+                            ),
+                          )
                         : Center(
                             child: _error != null
-                                ? const Text('Could not play video', style: TextStyle(color: Colors.white70))
+                                ? Padding(
+                                    padding: const EdgeInsets.all(16),
+                                    child: Text(
+                                      AppException.wrap(_error!).message,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(color: Colors.white70),
+                                    ),
+                                  )
                                 : const CircularProgressIndicator(),
                           ),
                   ),
@@ -171,7 +424,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                           child: IconButton(
                             iconSize: 54,
                             icon: Icon(
-                              _isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded,
+                              _isPlaying
+                                  ? Icons.pause_circle_filled_rounded
+                                  : Icons.play_circle_filled_rounded,
                               color: Colors.white,
                             ),
                             onPressed: _togglePlay,
@@ -191,7 +446,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         c,
                         allowScrubbing: true,
                         colors: const VideoProgressColors(
-                          playedColor: Color(0xFFFF0000), // YouTube Red
+                          playedColor: Color(0xFFFF0000),
                           bufferedColor: Colors.white30,
                           backgroundColor: Colors.white12,
                         ),
@@ -208,25 +463,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 children: <Widget>[
                   // Title
                   Text(
-                    widget.video.title ?? widget.video.caption ?? 'Untitled Video',
+                    video.title ?? video.caption ?? 'Untitled Video',
                     style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${widget.video.viewCount} views • ${ChatFormatting.dayLabel(widget.video.createdAt)}',
+                    '${video.viewCount} views • ${ChatFormatting.dayLabel(video.createdAt)}',
                     style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
                   ),
                   const SizedBox(height: 14),
 
-                  // Creator Channel Row
+                  // Creator Row
                   Row(
                     children: <Widget>[
                       CircleAvatar(
                         radius: 20,
                         backgroundColor: scheme.primaryContainer,
                         child: Text(
-                          (widget.video.authorName ?? 'U').substring(0, 1).toUpperCase(),
-                          style: TextStyle(fontWeight: FontWeight.bold, color: scheme.onPrimaryContainer),
+                          (video.authorName ?? 'U').substring(0, 1).toUpperCase(),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: scheme.onPrimaryContainer,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -236,40 +494,36 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                           children: <Widget>[
                             Row(
                               children: <Widget>[
-                                Text(
-                                  widget.video.authorName ?? '@creator',
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                Flexible(
+                                  child: Text(
+                                    video.authorName ?? '@creator',
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                  ),
                                 ),
-                                if (widget.video.authorRoleBadge != null) ...<Widget>[
+                                if (video.authorRoleBadge != null) ...<Widget>[
                                   const SizedBox(width: 6),
                                   DiscordRoleBadge(
-                                    badge: widget.video.authorRoleBadge!,
-                                    colorHex: widget.video.authorRoleColor,
+                                    badge: video.authorRoleBadge!,
+                                    colorHex: video.authorRoleColor,
                                     compact: true,
                                   ),
                                 ],
                               ],
                             ),
-                            Text(
-                              '@${widget.video.authorUsername ?? 'channel'}',
-                              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-                            ),
+                            if (video.authorUsername != null)
+                              Text(
+                                '@${video.authorUsername}',
+                                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                              ),
                           ],
                         ),
-                      ),
-                      FilledButton.tonal(
-                        onPressed: () {},
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        child: const Text('Subscribe'),
                       ),
                     ],
                   ),
                   const SizedBox(height: 14),
 
-                  // Action Buttons: Like, Share, Remix, Comments
+                  // Action Buttons: Like, Share, Download
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
@@ -285,21 +539,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         ),
                         const SizedBox(width: 8),
                         OutlinedButton.icon(
-                          onPressed: () {},
+                          onPressed: _shareVideo,
                           icon: const Icon(Icons.share_rounded, size: 18),
                           label: const Text('Share'),
                         ),
                         const SizedBox(width: 8),
                         OutlinedButton.icon(
-                          onPressed: () {},
+                          onPressed: _downloading ? null : _downloadVideo,
                           icon: const Icon(Icons.download_rounded, size: 18),
-                          label: const Text('Download'),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          onPressed: () {},
-                          icon: const Icon(Icons.cut_rounded, size: 18),
-                          label: const Text('Clip'),
+                          label: Text(_downloading ? 'Preparing…' : 'Download'),
                         ),
                       ],
                     ),
@@ -319,12 +567,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          const Text('Description', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          const Text(
+                            'Description',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
                           const SizedBox(height: 6),
                           SelectableText.rich(
                             TextSpan(
                               children: DiscordMarkdown.parse(
-                                widget.video.description ?? widget.video.caption ?? 'No description provided.',
+                                video.description ?? video.caption ?? 'No description provided.',
                                 context: context,
                               ),
                             ),
@@ -333,7 +584,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                           const SizedBox(height: 4),
                           Text(
                             _descriptionExpanded ? 'Show less' : '...more',
-                            style: TextStyle(fontWeight: FontWeight.bold, color: scheme.primary, fontSize: 12),
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: scheme.primary,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),

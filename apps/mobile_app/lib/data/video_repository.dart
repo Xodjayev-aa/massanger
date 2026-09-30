@@ -131,6 +131,7 @@ class VideoRepository {
     required String key,
     VideoScope? scope,
     String? chatId,
+    bool download = false,
   }) async {
     final resolved = scope ?? VideoScope.fromKey(key);
     final chat = chatId ?? VideoScope.chatIdFromKey(key);
@@ -139,6 +140,7 @@ class VideoRepository {
       'scope': resolved.wire,
       if (chat != null) 'chatId': chat,
       'key': key,
+      if (download) 'download': true,
     });
     final url = data['url'];
     if (url is! String || url.isEmpty) {
@@ -146,6 +148,19 @@ class VideoRepository {
     }
     return url;
   }
+
+  /// Presigned GET with `Content-Disposition: attachment` for browser downloads.
+  Future<String> downloadUrl({
+    required String key,
+    VideoScope? scope,
+    String? chatId,
+  }) =>
+      playbackUrl(
+        key: key,
+        scope: scope,
+        chatId: chatId,
+        download: true,
+      );
 
   /// Best-effort cleanup for an upload that never became a message. Attached
   /// media is refused server-side on purpose: the message-row lifecycle owns it.

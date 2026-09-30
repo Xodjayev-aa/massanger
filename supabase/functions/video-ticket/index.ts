@@ -60,6 +60,8 @@ type RequestBody = {
   chatId?: string;
   /** Object key; required for confirm / get / delete. */
   key?: string;
+  /** get only: request a signed attachment Content-Disposition for browser downloads. */
+  download?: boolean;
   /** put only: declared shape, verified against the bytes at confirm. */
   mime?: string;
   durationMs?: number;
@@ -258,19 +260,46 @@ function handle(request: Request): Promise<Response> {
 
       case 'get': {
         const key = expectKey(body.key);
-        assertKeyScope(scope, key, chatId, caller.uid);
+        const asUser = userClient(env, token!);
         if (scope === 'chat') {
           if (chatId === null) {
             throw new HttpError('bad_request', 'chatId is required for a chat ticket');
           }
+          assertKeyScope(scope, key, chatId, caller.uid);
           // Watching needs membership, not posting standing: a restricted
           // account still reads its own chats, exactly like message RLS.
-          await requireChatMember(userClient(env, token!), caller.uid, chatId);
+          await requireChatMember(asUser, caller.uid, chatId);
+        } else {
+          if (!key.startsWith('shorts/')) {
+            throw new HttpError('bad_request', 'key does not belong to shorts');
+          }
+          // Feed videos are readable by any authenticated user, provided the
+          // key belongs to a published row and matches its author-scoped path.
+          const { data: shortRow, error: shortError } = await asUser
+            .from('shorts')
+            .select('id, author_id')
+            .eq('object_key', key)
+            .maybeSingle();
+          if (shortError) {
+            throw new HttpError('upstream_error', 'could not verify the video');
+          }
+          if (
+            !shortRow ||
+            typeof shortRow.author_id !== 'string' ||
+            !key.startsWith(`shorts/${shortRow.author_id}/`)
+          ) {
+            throw new HttpError('not_found', 'that video does not exist');
+          }
         }
+        const rawFile = key.split('/').pop() ?? 'video.mp4';
+        const fileName = /^[A-Za-z0-9._-]+$/.test(rawFile) ? rawFile : 'video.mp4';
         const url = await presignS3(s3, {
           method: 'GET',
           key,
           expiresInSeconds: GET_EXPIRES_SECONDS,
+          responseContentDisposition: body.download === true
+            ? `attachment; filename="${fileName}"`
+            : undefined,
         });
         return ok({ url, expiresInSeconds: GET_EXPIRES_SECONDS }, cors);
       }
