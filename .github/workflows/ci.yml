@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # main is the release line; the Arena session branches are where the work
+    # actually happens, and a green check there is the only place a rewritten
+    # Flutter client gets compiled before it reaches a pull request.
+    branches: [main, 'arena/**']
   pull_request:
   workflow_dispatch:
 
