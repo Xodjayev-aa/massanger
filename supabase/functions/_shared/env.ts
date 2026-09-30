@@ -49,6 +49,18 @@ export type Env = Readonly<{
   videoS3SecretAccessKey: string | null;
   videoBucket: string | null;
 
+  /**
+   * Stripe: the paid half of the star economy. `tag.custom` is priced at $2.49
+   * in `star_products`, and this is the only way real money enters the system.
+   * Optional in the same all-or-nothing sense as Web Push — without it
+   * `stripe-checkout` reports `configured: false` and the app hides the top-up
+   * button rather than offering a checkout that cannot complete.
+   */
+  stripeSecretKey: string | null;
+  stripeWebhookSecret: string | null;
+  /** Origins a checkout may return to; must be a subset of allowedOrigins. */
+  stripeReturnOrigins: string[];
+
   /** Misc */
   allowedOrigins: string[];
   maxBodyBytes: number;
@@ -86,6 +98,11 @@ const list = (name: string, fallback: string[] = []): string[] => {
 };
 
 export function readEnv(): Env {
+  const allowedOrigins = list('ALLOWED_ORIGINS', ['*']);
+  // An unset return-origin allowlist means "the same origins that may call us
+  // at all" — derived, so those entries are validated by the ALLOWED_ORIGINS
+  // rule instead, which gives the operator the message they can act on.
+  const declaredReturnOrigins = str('STRIPE_RETURN_ORIGINS');
   // An accidental MESSENGERX_ENV=prod must not disable hosted safety checks.
   const selected = str('MESSENGERX_ENV', 'production');
   if (selected !== 'production' && selected !== 'staging' && selected !== 'local' && selected !== 'development') {
@@ -115,7 +132,11 @@ export function readEnv(): Env {
     videoS3SecretAccessKey: str('VIDEO_S3_SECRET_ACCESS_KEY'),
     videoBucket: str('VIDEO_BUCKET'),
 
-    allowedOrigins: list('ALLOWED_ORIGINS', ['*']),
+    stripeSecretKey: str('STRIPE_SECRET_KEY'),
+    stripeWebhookSecret: str('STRIPE_WEBHOOK_SECRET'),
+    stripeReturnOrigins: list('STRIPE_RETURN_ORIGINS', allowedOrigins.filter((origin) => origin !== '*')),
+
+    allowedOrigins,
     maxBodyBytes: int('MAX_BODY_BYTES', 1_500_000),
     ingestMaxEvents: int('INGEST_MAX_EVENTS', 120),
     clockSkewSeconds: int('CLOCK_SKEW_SECONDS', 60),
@@ -188,6 +209,35 @@ export function readEnv(): Env {
   if (env.videoBucket !== null && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(env.videoBucket)) {
     throw new HttpError('misconfigured', 'VIDEO_BUCKET must be a valid bucket name');
   }
+
+  // Stripe: two values, all or none, and the key must look like a Stripe key.
+  // A live key in the wrong environment is a real-money mistake, so it is worth
+  // refusing to boot over.
+  const stripeSet = [env.stripeSecretKey, env.stripeWebhookSecret].filter((part) => part !== null).length;
+  if (stripeSet !== 0 && stripeSet !== 2) {
+    throw new HttpError('misconfigured', 'STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be set together');
+  }
+  if (env.stripeSecretKey !== null) {
+    const prefix = env.environment === 'production' ? 'sk_live_' : 'sk_test_';
+    if (!env.stripeSecretKey.startsWith(prefix)) {
+      throw new HttpError('misconfigured', `${env.environment} requires a ${prefix} Stripe key`);
+    }
+    if (!env.stripeWebhookSecret?.startsWith('whsec_')) {
+      throw new HttpError('misconfigured', 'STRIPE_WEBHOOK_SECRET must start with whsec_');
+    }
+  }
+  // Where a checkout may send the browser back to. An origin nobody vouched for
+  // turns a payment page into an open redirect, so this defaults to the already
+  // validated ALLOWED_ORIGINS and can never exceed it.
+  for (const origin of declaredReturnOrigins === null ? [] : env.stripeReturnOrigins) {
+    if (!/^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(origin)) {
+      throw new HttpError('misconfigured', `STRIPE_RETURN_ORIGINS entry "${origin}" must be an https origin`);
+    }
+    if (environment !== 'development' && environment !== 'local' &&
+        !env.allowedOrigins.includes(origin) && !env.allowedOrigins.includes('*')) {
+      throw new HttpError('misconfigured', `STRIPE_RETURN_ORIGINS entry "${origin}" is not in ALLOWED_ORIGINS`);
+    }
+  }
   if (env.videoS3AccessKeyId !== null && env.videoS3AccessKeyId.length < 16) {
     throw new HttpError('misconfigured', 'VIDEO_S3_ACCESS_KEY_ID looks too short to be a real key id');
   }
@@ -195,6 +245,9 @@ export function readEnv(): Env {
     throw new HttpError('misconfigured', 'VIDEO_S3_SECRET_ACCESS_KEY looks too short to be a real secret');
   }
 
+  if ((environment === 'production' || environment === 'staging') && env.allowedOrigins.length === 0) {
+    throw new HttpError('misconfigured', `${environment} ALLOWED_ORIGINS must list exact HTTPS origins, never *`);
+  }
   if (environment === 'production' || environment === 'staging') {
     if (!env.supabaseUrl.startsWith('https://')) {
       throw new HttpError('misconfigured', `${environment} SUPABASE_URL must use HTTPS`);

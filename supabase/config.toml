@@ -88,9 +88,12 @@ policy = "oneshot"
 
 # ── functions ────────────────────────────────────────────────────────────────
 # verify_jwt = true rejects a request before our handler runs, which is what every
-# authenticated caller should get. telegram-ingest is the exception: the bridge has
-# no user JWT — it authenticates with its own bearer token plus an HMAC signature,
-# so the platform check must be off there and the function's own check is mandatory.
+# authenticated caller should get. Two functions are the exception, and both
+# authenticate the request themselves:
+#   • telegram-ingest — the bridge has no user JWT; it presents its own bearer
+#     token plus an HMAC signature.
+#   • stripe-webhook — Stripe cannot hold a Supabase session; the `Stripe-Signature`
+#     HMAC over the raw body is the authentication, and it is mandatory.
 
 [functions.account-age-gate]
 enabled = true
@@ -124,6 +127,20 @@ verify_jwt = false
 [functions.video-ticket]
 enabled = true
 verify_jwt = true
+
+# Stripe checkout. Sessions are minted for a signed-in user only, and the price
+# is read from `star_products` rather than from the request.
+[functions.stripe-checkout]
+enabled = true
+verify_jwt = true
+
+# Stripe settlement. No JWT: the signature is the authentication, and the
+# function hands the raw event to the idempotent `payment_settle` /
+# `payment_refund` RPCs. A deployment with no Stripe secrets answers 500 without
+# touching the database.
+[functions.stripe-webhook]
+enabled = true
+verify_jwt = false
 
 [studio]
 enabled = true

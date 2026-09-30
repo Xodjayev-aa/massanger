@@ -897,4 +897,77 @@ export async function registerNewFeatureTests(h) {
     await become(U.a);
     eq(Number((await query(`select * from public.payout_requests_list()`)).length), 1);
   });
+
+  await test('a refund claws back unspent stars and revokes what the purchase granted', async () => {
+    // A fresh buyer: $2.49 of Stars, then a chargeback.
+    await becomeService();
+    await exec(`select public.payment_create_pending('${U.b}', 'stars.500', 'cs_test_refund_1', 499,
+      '{"sku": "stars.500", "user_id": "${U.b}"}'::jsonb)`);
+    const paid = {
+      id: 'evt_test_refund_1',
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_test_refund_1',
+          payment_intent: 'pi_test_refund_1',
+          amount_total: 499,
+          metadata: { sku: 'stars.500', user_id: U.b },
+        },
+      },
+    };
+    const settled = await scalar(`select public.payment_settle(${jsonLit(paid)})`);
+    assert(Number(settled.stars_granted) > 0, 'the purchase credited Stars');
+
+    const refunded = {
+      id: 'evt_test_refund_2',
+      type: 'charge.refunded',
+      data: { object: { object: 'charge', id: 'ch_test_1', payment_intent: 'pi_test_refund_1' } },
+    };
+    const before = Number(await scalar(`select balance from public.star_wallets where user_id = '${U.b}'`));
+    const outcome = await scalar(`select public.payment_refund(${jsonLit(refunded)})`);
+    eq(outcome.ok, true);
+    eq(Number(outcome.stars_reclaimed), Number(settled.stars_granted), 'every Star this purchase granted came back');
+    eq(Number(outcome.shortfall), 0, 'and the balance could cover all of it');
+    eq(Number(await scalar(`select balance from public.star_wallets where user_id = '${U.b}'`)),
+      before - Number(settled.stars_granted), 'only this purchase came off');
+
+    // Redelivery is a no-op, not a second clawback.
+    const replay = await scalar(`select public.payment_refund(${jsonLit(refunded)})`);
+    eq(replay.duplicate, true);
+    eq(Number(await scalar(`select balance from public.star_wallets where user_id = '${U.b}'`)),
+      before - Number(settled.stars_granted));
+
+    await become(U.b);
+    const mine = await rpc('public.payment_refund_list', `10`);
+    eq(mine.length, 1);
+    eq(mine[0].sku, 'stars.500');
+    eq(Number(await scalar(`select balance from public.star_wallets where user_id = '${U.b}'`)),
+      before - Number(settled.stars_granted));
+    eq(await scalar(`select balance = (select sum(delta) from public.star_ledger where user_id = '${U.b}')
+                       from public.star_wallets where user_id = '${U.b}'`), true,
+      'the ledger still reconciles after the debit');
+  });
+
+  await test('a refund for a session we never recorded is acknowledged, not retried forever', async () => {
+    await becomeService();
+    const unknown = {
+      id: 'evt_test_refund_3',
+      type: 'charge.refunded',
+      data: { object: { object: 'charge', id: 'ch_unknown', payment_intent: 'pi_never_seen' } },
+    };
+    const outcome = await scalar(`select public.payment_refund(${jsonLit(unknown)})`);
+    eq(outcome.matched, false);
+    eq(await scalar(`select processed_at is not null from public.stripe_events where id = 'evt_test_refund_3'`), true);
+  });
+
+  await test('refunds are not a client capability', async () => {
+    await become(U.a);
+    await throws(
+      () => exec(`select public.payment_refund('{"id": "evt_x", "type": "charge.refunded"}'::jsonb)`),
+      /permission denied/i,
+    );
+    await becomeOwner();
+    eq(await scalar(`select has_function_privilege('authenticated', 'public.payment_refund(jsonb)', 'execute')`), false);
+    eq(await scalar(`select has_function_privilege('service_role', 'public.payment_refund(jsonb)', 'execute')`), true);
+  });
 }
