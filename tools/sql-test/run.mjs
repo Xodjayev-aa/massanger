@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
 import { registerNewFeatureTests } from './new_features.tests.mjs';
 import { registerBotTests } from './bot_platform.tests.mjs';
+import { registerClientSurfaceTests } from './client_surface.tests.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -2306,6 +2307,13 @@ group('new engines (00020-00025)');
 await registerNewFeatureTests({
   test, group, eq, assert, throws, exec, query, one, scalar,
   become, becomeService, becomeOwner, U, rpc,
+});
+
+// ---------------------------------------------------------------------------
+group('client surface (00028-00031)');
+await registerClientSurfaceTests({
+  test, group, eq, assert, throws, exec, query, one, scalar,
+  become, becomeOwner, U, rpc,
 });
 
 // ---------------------------------------------------------------------------
