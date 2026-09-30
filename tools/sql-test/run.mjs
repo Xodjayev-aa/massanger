@@ -2295,6 +2295,438 @@ await test('deleting a short cascades its likes and clears the feed', async () =
   eq(Number(await scalar(`select count(*)::int from public.short_likes`)), 0, 'likes cascaded');
 });
 
+
+// ---------------------------------------------------------------------------
+group('identity, tags & stars (00020)');
+
+await test('every profile carries a unique name#discriminator pair', async () => {
+  await becomeOwner();
+  const rows = await query(`select username, discriminator from public.profiles order by created_at`);
+  eq(rows.length >= 5, true, 'profiles exist');
+  for (const r of rows) {
+    assert(/^[0-9]{4}$/.test(r.discriminator), `discriminator shape for ${r.username}: ${r.discriminator}`);
+  }
+  eq(new Set(rows.map((r) => `${r.username}#${r.discriminator}`)).size, rows.length, 'handle pairs are unique');
+});
+
+await test('set_username re-rolls the discriminator and is rate limited', async () => {
+  await become(U.b);
+  const first = await one(`select * from public.set_username('dilnoza_k')`);
+  eq(first.username, 'dilnoza_k');
+  assert(/^[0-9]{4}$/.test(first.discriminator), 'a new discriminator is issued');
+  await throws(() => exec(`select * from public.set_username('dilnoza_k2')`), /30 days/);
+  await become(U.a);
+  await throws(() => exec(`select * from public.set_username('dilnoza_k')`), /taken/);
+});
+
+await test('privileged profile columns stay server-managed', async () => {
+  await become(U.a);
+  await throws(() => exec(`update public.profiles set star_balance = 999999 where id = '${U.a}'`), /server-managed/);
+  await throws(() => exec(`update public.profiles set lifetime_stars = 999999 where id = '${U.a}'`), /server-managed/);
+  await throws(() => exec(`update public.profiles set discriminator = '0001' where id = '${U.a}'`), /server-managed/);
+  await throws(() => exec(`update public.profiles set account_kind = 'bot' where id = '${U.a}'`), /server-managed/);
+  await exec(`update public.profiles set display_name = 'Aziz X', bio = 'building' where id = '${U.a}'`);
+  eq(await scalar(`select display_name from public.profiles where id = '${U.a}'`), 'Aziz X', 'the editable columns still work');
+});
+
+await test('daily stars: one grant per 24 h and the ledger agrees with the cache', async () => {
+  await become(U.a);
+  const granted = await one(`select * from public.star_claim_daily()`);
+  eq(Number(granted.granted), 25, 'the grant comes from platform_settings');
+  await throws(() => exec(`select * from public.star_claim_daily()`), /Already claimed/);
+  eq(Number(await scalar(`select star_balance from public.profiles where id = '${U.a}'`)), 25);
+  eq(Number(await scalar(`select coalesce(sum(delta), 0)::int from public.star_ledger where user_id = '${U.a}'`)), 25,
+     'ledger sum matches the cached balance');
+  const wallet = await one(`select * from public.star_wallet()`);
+  eq(Number(wallet.balance), 25);
+  eq(wallet.tier, 'free');
+  eq(Number(wallet.slots), 1, 'free tier owns one tag slot');
+});
+
+await test('stars_apply is idempotent and refuses to go negative', async () => {
+  await becomeService();
+  const first = await scalar(`select app.stars_apply('${U.a}', 50, 'bonus', 'system', null, null, 'test-idem-1')`);
+  const second = await scalar(`select app.stars_apply('${U.a}', 50, 'bonus', 'system', null, null, 'test-idem-1')`);
+  eq(Number(first), 75);
+  eq(Number(second), 75, 'the replay returns the same balance');
+  eq(Number(await scalar(`select count(*)::int from public.star_ledger where user_id = '${U.a}' and idempotency_key = 'test-idem-1'`)), 1,
+     'exactly one ledger row');
+  await throws(() => exec(`select app.stars_apply('${U.a}', -100000, 'tip_out', 'user', null, null, null)`), /Not enough stars/);
+  eq(Number(await scalar(`select star_balance from public.profiles where id = '${U.a}'`)), 75, 'a refused spend changes nothing');
+  eq(Number(await scalar(`select lifetime_stars from public.profiles where id = '${U.a}'`)), 50,
+     'only purchases and bonuses count towards the tier');
+});
+
+await test('a signed-in client cannot mint stars or read the switches table', async () => {
+  await become(U.a);
+  await throws(() => exec(`select app.stars_apply('${U.a}', 1000000, 'bonus', 'system', null, null, null)`), /permission denied/);
+  await throws(() => exec(`select app.notify('${U.a}', 'system', null, null, null, 'self')`), /permission denied/);
+  const cfg = await one(`select public.platform_config() as cfg`);
+  eq(Number(cfg.cfg['stars.price_cents']), 249, 'the public switches are readable');
+  eq(cfg.cfg['payments.stripe_enabled'], false, 'payments ship off');
+  eq(cfg.cfg['payments.mode'], 'beta_free');
+  await throws(() => exec(`update public.platform_settings set value = 'true' where key = 'payments.stripe_enabled'`),
+    /permission denied|row-level security/);
+});
+
+await test('tags: mint, marketplace cut, equip — and no equipping what you do not own', async () => {
+  await becomeService();
+  await exec(`select app.stars_apply('${U.a}', 100, 'bonus', 'system', null, null, 'tag-test-a')`);
+  await exec(`select app.stars_apply('${U.b}', 100, 'purchase', 'payment', null, null, 'tag-test-b')`);
+
+  await become(U.a);
+  const flexId = await scalar(`select public.tag_create('flex', 'FLEX', '#F43F5E', null, 20)`);
+  eq(Number(await scalar(`select star_balance from public.profiles where id = '${U.a}'`)), 135,
+     'minting burns stars.tag_create_cost (40)');
+  await exec(`select public.tag_equip('${flexId}'::uuid)`);
+  eq(await scalar(`select tag_id from public.profiles where id = '${U.a}'`), flexId);
+  await throws(() => exec(`select public.tag_create('flex', 'FLEX2')`), /taken/);
+  await throws(() => exec(`select public.tag_create('BAD SLUG', 'X')`), /2-12 characters/);
+
+  await become(U.b);
+  eq(Number(await scalar(`select public.tag_buy('${flexId}'::uuid)`)), 20, 'the price is charged');
+  await exec(`select public.tag_equip('${flexId}'::uuid)`);
+  eq(await scalar(`select tag_id from public.profiles where id = '${U.b}'`), flexId);
+
+  await become(U.a);
+  eq(Number(await scalar(`select star_balance from public.profiles where id = '${U.a}'`)), 145,
+     'the creator earns 50% of the sale');
+
+  const soloId = await scalar(`select public.tag_create('solo', 'SOLO')`);
+  await become(U.b);
+  await throws(() => exec(`select public.tag_equip('${soloId}'::uuid)`), /not in your collection/);
+  const mine = await query(`select slug, equipped from public.tag_mine()`);
+  eq(mine.length, 1, 'B owns exactly the tag they bought');
+  eq(mine[0].equipped, true);
+
+  const catalogue = await query(`select slug, owned, equipped from public.tag_catalogue()`);
+  eq(catalogue.some((row) => row.slug === 'flex' && row.owned && row.equipped), true);
+  eq(catalogue.some((row) => row.slug === 'early'), true, 'the official tags ship with the schema');
+});
+
+await test('the directory exposes the handle and the worn badge', async () => {
+  await become(U.b);
+  const row = await one(`select username, discriminator, tag_label, tag_color, account_kind, is_following
+                           from public.directory where id = '${U.a}'`);
+  eq(row.account_kind, 'user');
+  eq(row.tag_label, 'FLEX');
+  eq(row.tag_color, '#F43F5E');
+  eq(row.is_following, false, 'B does not follow A yet');
+  eq(await scalar(`select tag_label from public.directory where id = '${U.b}'`), 'FLEX', 'B wears it too');
+});
+
+await test('payments settle exactly once and only through the service role', async () => {
+  await becomeService();
+  const paymentId = await scalar(`insert into public.payments (user_id, provider, kind, stars, amount_cents, currency)
+    values ('${U.b}', 'stripe', 'stars', 100, 249, 'usd') returning id`);
+  await exec(`select public.payment_attach_session('${paymentId}', 'cs_test_checkout_1')`);
+  eq(await scalar(`select status from public.payments where id = '${paymentId}'`), 'pending');
+
+  const balanceBefore = Number(await scalar(`select star_balance from public.profiles where id = '${U.b}'`));
+  const first = await one(`select * from public.fulfill_payment('cs_test_checkout_1', 'pi_1', 'https://receipt.test/1')`);
+  eq(first.already_paid, false);
+  eq(Number(first.stars), 100);
+  eq(Number(await scalar(`select star_balance from public.profiles where id = '${U.b}'`)), balanceBefore + 100);
+  eq(await scalar(`select status from public.payments where id = '${paymentId}'`), 'paid');
+
+  const replay = await one(`select * from public.fulfill_payment('cs_test_checkout_1', 'pi_1', null)`);
+  eq(replay.already_paid, true, 'a retried webhook does not pay twice');
+  eq(Number(await scalar(`select star_balance from public.profiles where id = '${U.b}'`)), balanceBefore + 100);
+  eq(Number(await scalar(`select count(*)::int from public.star_ledger where ref_id = '${paymentId}'`)), 1);
+  await throws(() => exec(`select public.fulfill_payment('cs_test_checkout_unknown')`), /unknown payment session/);
+
+  await become(U.b);
+  await throws(() => exec(`select public.fulfill_payment('cs_test_checkout_1')`), /permission denied/);
+  eq((await query(`select status from public.payments`)).length, 1, 'a client can read its own payments');
+});
+
+await test('notifications land in one inbox, are scoped and can be cleared', async () => {
+  await become(U.a);
+  const baseline = Number(await scalar(`select public.notifications_unread()`));
+  await becomeService();
+  await exec(`select app.notify('${U.a}', 'system', null, null, null, 'welcome to the super-app')`);
+  await exec(`select app.notify('${U.a}', 'system', '${U.a}', null, null, 'self-notification is dropped')`);
+
+  await become(U.a);
+  eq(Number(await scalar(`select public.notifications_unread()`)), baseline + 1);
+  const list = await query(`select kind, body, is_read from public.notifications_list(null, 10)`);
+  eq(list[0].body, 'welcome to the super-app', 'the newest notification leads the list');
+  eq(list.some((row) => row.body === 'self-notification is dropped'), false,
+     'a self-notification is never written');
+
+  await become(U.other);
+  eq((await query(`select id from public.notifications_list(null, 10)`)).length, 0, 'nobody else sees it');
+  await become(U.a);
+  eq(Number(await scalar(`select public.notifications_mark_read(null)`)), baseline + 1);
+  eq(Number(await scalar(`select public.notifications_unread()`)), 0);
+});
+
+// ---------------------------------------------------------------------------
+group('follows, long-form video, comments & views (00021)');
+
+const longId = '99999999-9999-4999-8999-999999999999';
+const shortId21 = '88888888-8888-4888-8888-888888888888';
+
+await test('long-form video: shape, caps and authorship', async () => {
+  await become(U.a);
+  await exec(`insert into public.videos (id, author_id, object_key, title, description, duration_ms, size_bytes, chapters)
+              values ('${longId}', '${U.a}', 'videos/${U.a}/app/long1.mp4', 'Tashkent at night',
+                      'A long walk through the city.', 600000, 52428800,
+                      '[{"t":0,"label":"Start"},{"t":120000,"label":"Registan"}]'::jsonb)`);
+  eq(Number(await scalar(`select duration_ms from public.videos where id = '${longId}'`)), 600000);
+  eq(Number(await scalar(`select jsonb_array_length(chapters) from public.videos where id = '${longId}'`)), 2);
+
+  await throws(
+    () => exec(`insert into public.videos (author_id, object_key, title, duration_ms, size_bytes)
+                values ('${U.a}', 'videos/${U.a}/x.mp4', 'Too long', 14400001, 1000)`),
+    /duration_ms/,
+  );
+  await throws(
+    () => exec(`insert into public.videos (author_id, object_key, title, duration_ms, size_bytes)
+                values ('${U.a}', 'videos/${U.a}/y.mp4', 'Too big', 1000, 2147483649)`),
+    /size_bytes/,
+  );
+  await throws(
+    () => exec(`insert into public.videos (author_id, object_key, title, duration_ms, size_bytes)
+                values ('${U.a}', 'videos/${U.a}/app/long1.mp4', 'Duplicate key', 1000, 1000)`),
+    /duplicate key/,
+  );
+  await throws(
+    () => exec(`insert into public.videos (author_id, object_key, title, duration_ms, size_bytes)
+                values ('${U.b}', 'videos/${U.b}/app/stolen.mp4', 'Stolen', 1000, 1000)`),
+    /row-level security/,
+  );
+  eq(await scalar(`select search_tsv is not null from public.videos where id = '${longId}'`), true,
+     'the search vector is trigger-maintained');
+});
+
+await test('reels can be commented on and searched too', async () => {
+  await become(U.a);
+  await exec(`insert into public.shorts (id, author_id, object_key, duration_ms, size_bytes, caption)
+              values ('${shortId21}', '${U.a}', 'shorts/${U.a}/app/reel1.mp4', 15000, 1048576, 'Sunset over the Amir Temur square')`);
+  eq(await scalar(`select search_tsv is not null from public.shorts where id = '${shortId21}'`), true);
+});
+
+await test('following is directed, idempotent and notifies once', async () => {
+  await become(U.b);
+  const first = await one(`select * from public.follow('${U.a}'::uuid)`);
+  eq(first.following, true);
+  eq(Number(first.followers), 1);
+  const again = await one(`select * from public.follow('${U.a}'::uuid)`);
+  eq(Number(again.followers), 1, 'following twice does not double the counter');
+  await throws(() => exec(`select * from public.follow('${U.b}'::uuid)`), /cannot follow yourself/i);
+  await become(U.a);
+  eq((await query(`select kind, body from public.notifications_list(null, 5)`))
+       .some((row) => row.kind === 'follow'), true, 'the follow notification reached the recipient');
+  await become(U.b);
+
+  const stats = await one(`select * from public.profile_stats('${U.a}'::uuid)`);
+  eq(Number(stats.followers), 1);
+  eq(stats.i_follow, true);
+  eq(stats.follows_me, false);
+  eq(Number(stats.videos), 1);
+  eq(Number(stats.shorts), 1);
+
+  await become(U.other);
+  await throws(
+    () => exec(`insert into public.follows (follower_id, followee_id) values ('${U.a}', '${U.b}')`),
+    /row-level security/,
+  );
+  await become(U.b);
+  eq(Number(await scalar(`select count(*)::int from public.follows`)), 1, 'only my own edge is visible');
+  await become(U.other);
+  eq(Number(await scalar(`select count(*)::int from public.follows`)), 0, 'a stranger sees no edges');
+});
+
+await test('feed_videos: For you vs Following, unlisted stays hidden, likes are mine only', async () => {
+  await become(U.b);
+  await exec(`insert into public.video_likes (video_id, user_id) values ('${longId}', '${U.b}')`);
+  const following = await query(`select * from public.feed_videos(true, null, 10, null)`);
+  eq(following.length, 1, 'the Following tab shows the account I follow');
+  eq(following[0].liked_by_me, true);
+  eq(Number(following[0].like_count), 1, 'the like counter moved on the video row');
+  eq(following[0].following_author, true);
+  eq(following[0].author_tag_label, 'FLEX', 'the badge travels with the author projection');
+
+  await exec(`select * from public.unfollow('${U.a}'::uuid)`);
+  eq((await query(`select id from public.feed_videos(true, null, 10, null)`)).length, 0,
+     'unfollowing empties the Following tab');
+  eq((await query(`select id from public.feed_videos(false, null, 10, null)`)).length, 1,
+     'For you still shows it');
+
+  await become(U.a);
+  await exec(`update public.videos set visibility = 'unlisted' where id = '${longId}'`);
+  await become(U.b);
+  eq((await query(`select id from public.feed_videos(false, null, 10, null)`)).length, 0,
+     'unlisted content stays out of every feed');
+  await becomeService();
+  await exec(`update public.videos set visibility = 'public' where id = '${longId}'`);
+
+  await become(U.a);
+  await exec(`select * from public.follow('${U.b}'::uuid)`);
+  await become(U.b);
+  await exec(`select * from public.follow('${U.a}'::uuid)`);
+  const byAuthor = await query(`select id from public.feed_videos(false, null, 10, '${U.a}'::uuid)`);
+  eq(byAuthor.length, 1, 'the author filter is the profile page contract');
+});
+
+await test('views count once per viewer per day and never for the author', async () => {
+  await become(U.a);
+  const own = await one(`select * from public.register_view('video', '${longId}'::uuid, 5000)`);
+  eq(own.counted, false, 'the author is not a view');
+  await become(U.b);
+  const first = await one(`select * from public.register_view('video', '${longId}'::uuid, 8000)`);
+  eq(first.counted, true);
+  eq(Number(first.total_views), 1);
+  const second = await one(`select * from public.register_view('video', '${longId}'::uuid, 30000)`);
+  eq(second.counted, false, 'the second view on the same day is not a new view');
+  eq(Number(second.total_views), 1);
+  eq(Number(await scalar(`select watched_ms from public.content_views where viewer_id = '${U.b}'`)), 30000,
+     'watch time still updates');
+  await throws(() => exec(`select * from public.register_view('video', '${U.other}'::uuid, 1000)`), /does not exist/);
+});
+
+await test('comments: one system for videos and reels, with real counters', async () => {
+  await become(U.b);
+  const rootId = await scalar(`select public.comment_add('video', '${longId}'::uuid, 'Great walk!')`);
+  const replyId = await scalar(`select public.comment_add('video', '${longId}'::uuid, 'Thanks!', '${rootId}'::uuid)`);
+  eq(Number(await scalar(`select comment_count from public.videos where id = '${longId}'`)), 2);
+  eq(Number(await scalar(`select reply_count from public.content_comments where id = '${rootId}'`)), 1);
+  eq(await scalar(`select root_id from public.content_comments where id = '${replyId}'`), rootId,
+     'a reply attaches to the root, so threads stay two levels deep');
+
+  const roots = await query(`select id, body, is_mine, author_username, author_tag_label
+                               from public.comment_list('video', '${longId}'::uuid, null, null, 10, 'top')`);
+  eq(roots.length, 1, 'one root comment');
+  eq(roots[0].is_mine, true);
+  eq(roots[0].author_username, 'dilnoza_k');
+  const replies = await query(`select id, parent_id from public.comment_list('video', '${longId}'::uuid, '${rootId}'::uuid, null, 10, 'new')`);
+  eq(replies.length, 1, 'the reply list is scoped to its root');
+  eq(replies[0].parent_id, rootId);
+
+  await throws(() => exec(`select public.comment_add('video', '${U.other}'::uuid, 'ghost')`), /does not exist/);
+  await throws(() => exec(`select public.comment_add('video', '${longId}'::uuid, '   ')`), /Write something/);
+
+  // The short gets its own thread from the same table.
+  const shortComment = await scalar(`select public.comment_add('short', '${shortId21}'::uuid, 'Love this bit')`);
+  eq(Number(await scalar(`select comment_count from public.shorts where id = '${shortId21}'`)), 1);
+  eq(Number(await scalar(`select count(*)::int from public.content_comments where subject_kind = 'short'`)), 1);
+
+  // Likes, pins and authorship.
+  await exec(`select * from public.comment_like('${rootId}'::uuid, true)`);
+  eq(Number(await scalar(`select like_count from public.content_comments where id = '${rootId}'`)), 1);
+  await exec(`select * from public.comment_like('${rootId}'::uuid, false)`);
+  eq(Number(await scalar(`select like_count from public.content_comments where id = '${rootId}'`)), 0);
+
+  await become(U.other);
+  await throws(() => exec(`select public.comment_pin('${rootId}'::uuid, true)`), /Only the creator/);
+  await throws(() => exec(`select public.comment_delete('${rootId}'::uuid)`), /only delete your own/);
+
+  await become(U.a);
+  await exec(`select public.comment_pin('${rootId}'::uuid, true)`);
+  eq(await scalar(`select is_pinned from public.content_comments where id = '${rootId}'`), true);
+  const pinned = await query(`select id from public.comment_list('video', '${longId}'::uuid, null, null, 10, 'new')`);
+  eq(pinned[0].id, rootId, 'a pinned comment sorts first even under "new"');
+
+  await become(U.b);
+  await exec(`select public.comment_delete('${rootId}'::uuid)`);
+  eq(Number(await scalar(`select comment_count from public.videos where id = '${longId}'`)), 1,
+     'a soft delete still moves the counter');
+  const afterDelete = await query(`select body, author_name from public.comment_list('video', '${longId}'::uuid, null, null, 10, 'new')`);
+  eq(afterDelete[0].body, null, 'the text is gone from every read path');
+  eq(shortComment.length > 0, true);
+});
+
+await test('search_content finds people, long-form and reels; one letter is not a search', async () => {
+  await become(U.b);
+  const people = await query(`select kind, title from public.search_content('dilnoza', 10, 'people')`);
+  eq(people.length, 1);
+  eq(people[0].kind, 'people');
+  const videos = await query(`select kind, title, author_username from public.search_content('tashkent', 10, 'video')`);
+  eq(videos.length, 1);
+  eq(videos[0].title, 'Tashkent at night');
+  const reels = await query(`select kind, title, snippet from public.search_content('sunset', 10, null)`);
+  eq(reels.some((row) => row.kind === 'short'), true, 'captions are searchable');
+  eq((await query(`select * from public.search_content('t', 10, null)`)).length, 0,
+     'the minimum length comes from platform_settings');
+});
+
+await test('tips move stars between two accounts and are recorded for both', async () => {
+  await becomeService();
+  await exec(`select app.stars_apply('${U.b}', 200, 'purchase', 'payment', null, null, 'tip-setup')`);
+  await become(U.a);
+  const beforeA = Number(await scalar(`select star_balance from public.profiles where id = '${U.a}'`));
+  await become(U.b);
+  const beforeB = Number(await scalar(`select star_balance from public.profiles where id = '${U.b}'`));
+  const tip = await one(`select * from public.star_tip('${U.a}'::uuid, 'video', '${longId}'::uuid, 20, 'nice one')`);
+  eq(Number(tip.sent), 20);
+  eq(Number(await scalar(`select star_balance from public.profiles where id = '${U.b}'`)), beforeB - 20);
+  await become(U.a);
+  eq(Number(await scalar(`select star_balance from public.profiles where id = '${U.a}'`)), beforeA + 20,
+     'the receiver is credited in the same transaction');
+  await become(U.b);
+  await throws(() => exec(`select * from public.star_tip('${U.a}'::uuid, 'video', '${longId}'::uuid, 100000, null)`),
+    /Daily tip budget|between 1 and 5000/);
+  await become(U.a);
+  const earnings = await one(`select * from public.creator_earnings()`);
+  eq(Number(earnings.tips_received) >= 1, true);
+  eq(Number(earnings.stars_earned) >= 20, true);
+  eq(Number(earnings.followers), 1);
+  eq(Number(earnings.total_views), 1);
+});
+
+await test('creator_stats yields one row per day and suggested_creators skips who I follow', async () => {
+  await become(U.a);
+  const series = await query(`select * from public.creator_stats(7)`);
+  eq(series.length, 7, 'a seven day series');
+  eq(series.every((row) => typeof row.day === 'string' || row.day instanceof Date), true);
+  eq(Number(series[series.length - 1].views), 1, "today's view is on the curve");
+  eq(Number(series[series.length - 1].likes), 1);
+  eq(Number(series[series.length - 1].stars) >= 20, true, "today's tip is on the curve");
+
+  const suggestions = await query(`select username from public.suggested_creators(10)`);
+  eq(suggestions.every((row) => row.username !== 'aziz_carrier'), true, 'never myself');
+  eq(suggestions.every((row) => row.username !== 'dilnoza_k'), true, 'never somebody I already follow');
+});
+
+await test('the new tables are not a side door', async () => {
+  await become(U.other);
+  eq(Number(await scalar(`select count(*)::int from public.star_ledger where user_id = '${U.a}'`)), 0);
+  eq(Number(await scalar(`select count(*)::int from public.payments`)), 0);
+  eq(Number(await scalar(`select count(*)::int from public.notifications where user_id = '${U.a}'`)), 0);
+  eq(Number(await scalar(`select count(*)::int from public.video_likes where user_id = '${U.b}'`)), 0,
+     'who liked what is private');
+  eq(Number(await scalar(`select count(*)::int from public.content_views where viewer_id = '${U.b}'`)), 0,
+     'watch history is private');
+  await throws(
+    () => exec(`insert into public.star_ledger (user_id, delta, reason, balance_after) values ('${U.other}', 9999, 'bonus', 9999)`),
+    /permission denied|row-level security/,
+  );
+  await throws(
+    () => exec(`insert into public.tags (slug, label) values ('hax', 'HAX')`),
+    /permission denied|row-level security/,
+  );
+  await throws(
+    () => exec(`insert into public.content_views (subject_kind, subject_id, viewer_id) values ('video', '${longId}', '${U.other}')`),
+    /permission denied|row-level security/,
+  );
+  await throws(
+    () => exec(`insert into public.user_tags (user_id, tag_id) values ('${U.other}', '${longId}')`),
+    /permission denied|row-level security|violates foreign key/,
+  );
+});
+
+await test('anonymous visitors see nothing at all', async () => {
+  await exec(`reset role`);
+  await pg.query(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify({ role: 'anon' })]);
+  await exec(`set role anon`);
+  for (const table of ['public.videos', 'public.content_comments', 'public.follows', 'public.notifications',
+                       'public.star_ledger', 'public.payments']) {
+    await throws(() => exec(`select count(*) from ${table}`), /permission denied/);
+  }
+  await becomeOwner();
+});
+
 // ---------------------------------------------------------------------------
 await becomeOwner();
 const failed = results.filter((r) => !r.ok);
