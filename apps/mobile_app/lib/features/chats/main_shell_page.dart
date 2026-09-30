@@ -13,8 +13,8 @@ import '../../data/video_repository.dart';
 import '../chats/chats_bloc.dart';
 import '../chats/chats_page.dart';
 import '../profile/profile_page.dart';
-import 'shorts_page.dart';
-import 'youtube_feed_page.dart';
+import '../shorts/shorts_page.dart';
+import '../shorts/youtube_feed_page.dart';
 
 /// Next-Gen Master Scaffold combining:
 /// 1. Top App Bar: YouTube + TikTok Hybrid (Logo + Realtime Status + Search + Profile)
