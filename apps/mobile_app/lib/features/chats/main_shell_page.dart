@@ -36,7 +36,7 @@ class _MainShellPageState extends State<MainShellPage> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final chatsState = context.watch<ChatsBloc>().state;
-    final totalUnread = chatsState.totalUnread;
+    final totalUnread = chatsState.unreadTotal;
 
     return Scaffold(
       appBar: _buildTopAppBar(context),
