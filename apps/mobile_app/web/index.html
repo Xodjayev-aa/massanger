@@ -14,8 +14,67 @@
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <title>MessengerX</title>
+  <style>
+    /* Minimal loader while Flutter bootstraps — helps distinguish old cached builds */
+    #mx-loader {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: #F3F5FA; color: #2446AA; font-family: system-ui, -apple-system, sans-serif;
+      z-index: 9999;
+    }
+    #mx-loader span { font-size: 14px; opacity: 0.7; }
+  </style>
 </head>
 <body>
+  <div id="mx-loader"><span>MessengerX loading… <small id="mx-version"></small></span></div>
+
+  <script>
+    // PWA cache-busting helper:
+    // - Logs current build version from version.json (no-cache)
+    // - Forces service worker update check
+    // - If user lands on old cached index.html, hard reload once after SW update
+    (function() {
+      var versionEl = document.getElementById('mx-version');
+      try {
+        fetch('version.json', { cache: 'no-store' })
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(v) {
+            if (!v) return;
+            console.log('[MessengerX] build', v.version, 'at', v.builtAt, 'flutter', v.flutter);
+            if (versionEl) versionEl.textContent = v.version;
+            // Expose for debugging in console
+            window.MessengerXBuild = v;
+          }).catch(function(){});
+      } catch(e) {}
+
+      // Ask any existing service worker to update immediately.
+      // Flutter's offline-first SW caches the whole app; without this, old UI
+      // can stick around after a new Production deploy until user hard reloads.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(regs) {
+          regs.forEach(function(reg) {
+            try { reg.update(); } catch(e) {}
+          });
+        });
+        // If a new SW is waiting, reload to get new UI (common after Vercel deploy)
+        navigator.serviceWorker.addEventListener('controllerchange', function() {
+          console.log('[MessengerX] New service worker activated, reloading for fresh UI...');
+          window.location.reload();
+        });
+      }
+
+      // Remove loader once Flutter has rendered, or after 10s timeout
+      var removed = false;
+      function removeLoader() {
+        if (removed) return;
+        removed = true;
+        var el = document.getElementById('mx-loader');
+        if (el) el.style.display = 'none';
+      }
+      window.addEventListener('flutter-first-frame', removeLoader);
+      setTimeout(removeLoader, 10000);
+    })();
+  </script>
+
   <!-- Browser-notification bridge. Loaded before Flutter so the Dart side can
        always assume window.MessengerXPush exists. It registers no service
        worker and asks for no permission until the user turns notifications on. -->

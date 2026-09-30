@@ -52,8 +52,10 @@ export function assertNoForbiddenEnv(env) {
   if (present.length === 0) return;
   throw new Error(
     `Refusing to build the website while secret environment variables are set: ${present.join(', ')}. ` +
-      'Remove them from the Vercel project Environment Variables. The web build may contain only the public ' +
-      'Supabase URL and the anon/publishable key. Do not paste secrets into chat, Git or a workflow log.',
+      'Remove them from the Vercel project Environment Variables (Production AND Preview). ' +
+      'The web build may contain only the public Supabase URL and the anon/publishable key. ' +
+      'If Preview is green but Production is red, you likely added a secret only to Production — remove it. ' +
+      'Do not paste secrets into chat, Git or a workflow log.',
   );
 }
 
@@ -143,7 +145,9 @@ export function assertIntendedHost(redirectUrl, env) {
   throw new Error(
     `Refusing to build for "${host}". The chosen free hostname is ${INTENDED_SITE_HOST}. ` +
       'If Vercel says that project name is taken, stop and ask before using a different name. ' +
-      'Do not set MESSENGERX_ACCEPT_SITE_HOST unless that other hostname was explicitly agreed.',
+      'Do not set MESSENGERX_ACCEPT_SITE_HOST unless that other hostname was explicitly agreed. ' +
+      `To allow this host, set MESSENGERX_ACCEPT_SITE_HOST=${host} in Vercel -> Settings -> Environment Variables (Production and Preview). ` +
+      'If Preview is green but Production is red, check that Production env vars include MESSENGERX_ACCEPT_SITE_HOST if your production host differs.',
   );
 }
 
@@ -162,7 +166,8 @@ function resolveRedirect(env) {
     const fromVercel = normalizeSiteRedirect(`https://${productionHost(env.VERCEL_PROJECT_PRODUCTION_URL)}/`);
     if (redirect && redirect !== fromVercel) {
       throw new Error(
-        `The configured site URL ${redirect} does not match Vercel production host ${fromVercel}. Use one hostname.`,
+        `The configured site URL ${redirect} does not match Vercel production host ${fromVercel}. Use one hostname. ` +
+          'If you renamed the Vercel project, update INTENDED_SITE_HOST or set MESSENGERX_ACCEPT_SITE_HOST to the new host (ask first).',
       );
     }
     redirect = redirect || fromVercel;
@@ -177,7 +182,9 @@ function publicSupabaseUrl(raw) {
   if (!value) {
     throw new Error(
       'SUPABASE_URL is not set. In Vercel → Settings → Environment Variables, add the public project URL ' +
-        '(https://<project-ref>.supabase.co). Do not paste it into chat.',
+        '(https://<project-ref>.supabase.co) and enable it for Production AND Preview, then Redeploy. ' +
+        'If Preview is green but Production is red, you set the variable only for Preview — enable it for Production too. ' +
+        'Do not paste it into chat.',
     );
   }
   let url;
@@ -198,7 +205,25 @@ function publicSupabaseUrl(raw) {
   return url.origin;
 }
 
+function logEnvPresenceForVercel(env) {
+  if (!onVercel(env)) return;
+  const keys = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY', 'MESSENGERX_ACCEPT_SITE_HOST', 'WEB_REDIRECT_URL', 'VERCEL_PROJECT_PRODUCTION_URL', 'VERCEL_ENV'];
+  const present = keys.filter((k) => isSet(env, k));
+  const missing = keys.filter((k) => !isSet(env, k) && k.startsWith('SUPABASE_'));
+  // Do not print values, only presence, to avoid leaking keys into logs.
+  console.log(`[web_build_config] Vercel env: VERCEL_ENV=${env.VERCEL_ENV || 'unset'} PROD_URL=${env.VERCEL_PROJECT_PRODUCTION_URL || 'unset'}`);
+  console.log(`[web_build_config] Present: ${present.join(', ') || '(none of checked)'}`);
+  if (missing.length) {
+    console.log(`[web_build_config] Missing public keys: ${missing.join(', ')} — if Production is red but Preview green, enable these for Production in Vercel Settings.`);
+  }
+  const forbidden = forbiddenEnvNames(env);
+  if (forbidden.length) {
+    console.log(`[web_build_config] FORBIDDEN present: ${forbidden.join(', ')} — remove from Vercel env!`);
+  }
+}
+
 export function resolveWebBuild(env, { placeholder = false } = {}) {
+  logEnvPresenceForVercel(env);
   assertNoForbiddenEnv(env);
   if (placeholder) {
     if (onVercel(env)) {
@@ -226,8 +251,10 @@ export function resolveWebBuild(env, { placeholder = false } = {}) {
   const supabaseAnonKey = anon || publishable;
   if (!supabaseAnonKey) {
     throw new Error(
-      'SUPABASE_ANON_KEY is not set. In Vercel → Settings → Environment Variables, add the public anon or publishable key. ' +
-        'Do not add the service-role key, a Google client secret, or Telegram credentials. Do not paste keys into chat.',
+      'SUPABASE_ANON_KEY is not set. In Vercel → Settings → Environment Variables, add the public anon or publishable key and enable it for Production AND Preview, then Redeploy. ' +
+        'Do not add the service-role key, a Google client secret, or Telegram credentials. ' +
+        'If Preview is green but Production is red, you set the key only for Preview — enable it for Production too. ' +
+        'Do not paste keys into chat.',
     );
   }
   if (supabaseAnonKey === PLACEHOLDER_KEY) {
@@ -258,7 +285,7 @@ export function resolveWebBuild(env, { placeholder = false } = {}) {
 export function summaryLine(config) {
   const host = new URL(config.supabaseUrl).host;
   const redirect = config.webRedirectUrl || '(unset)';
-  return `web-build supabase_host=${host} redirect=${redirect} oidc=${config.telegramOidcEnabled}`;
+  return `web-build supabase_host=${host} redirect=${redirect} oidc=${config.telegramOidcEnabled} (Production green = live at ${INTENDED_SITE_ORIGIN})`;
 }
 
 function pngBitDepth(buffer) {
@@ -331,6 +358,9 @@ function main() {
     const config = resolveWebBuild(process.env, { placeholder: options.placeholder });
     fs.writeFileSync(options.out, `${JSON.stringify(config.defines, null, 2)}\n`, { mode: 0o600 });
     process.stdout.write(`${summaryLine(config)}\n`);
+    if (process.env.VERCEL_ENV === 'production') {
+      process.stdout.write(`Production build will be served at ${config.webRedirectUrl} — clear PWA cache (Ctrl+Shift+R) after deploy to see new UI.\n`);
+    }
     return;
   }
   if (options.command === 'verify-output') {

@@ -43,6 +43,61 @@ together (the test suite asserts they agree), or set
 The build compiles the OAuth return URL as `https://officialmessengerx.vercel.app/`
 (site root, no `/massanger/` path).
 
+## 0b. Why Production is Red While Preview is Green (Read This First)
+
+If your Vercel dashboard looks like this:
+
+- `main` branch Production rows: 🔴 **Error** 1-2 min
+- `arena/...` branch Preview row: 🟢 **Ready** 3-4 min (new YouTube+TikTok+Telegram+Discord UI)
+
+Then **Vercel never replaced the live site** at `officialmessengerx.vercel.app` with your new code. It keeps serving the last successful Production deploy (old UI).
+
+**Root causes (check in this order):**
+
+1. **Env vars scoped only to Preview, not Production**
+   - Vercel → Settings → Environment Variables → each variable has checkboxes for Production / Preview / Development.
+   - If you added `SUPABASE_URL` and `SUPABASE_ANON_KEY` only for Preview, Production builds fail with:
+     ```
+     SUPABASE_URL is not set... enable it for Production AND Preview, then Redeploy.
+     ```
+   - Fix: edit each variable → enable **Production** → Save → Deployments → **Redeploy** Production (not just Preview).
+
+2. **Forbidden secret set for Production**
+   - The web build must contain **only** public URL + anon key. If you added `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_OAUTH_CLIENT_SECRET`, `TELEGRAM_API_HASH`, `SEAL_KEY`, `BRIDGE_TOKEN`, etc. to Vercel Production, build fails with:
+     ```
+     Refusing to build while secret env vars are set: SUPABASE_SERVICE_ROLE_KEY...
+     ```
+   - Fix: Vercel → Settings → Environment Variables → delete all secrets from Production AND Preview. Only `SUPABASE_URL` and `SUPABASE_ANON_KEY` (or `SUPABASE_PUBLISHABLE_KEY`) belong in Vercel. Service-role and other secrets stay in Supabase Edge Functions secrets, never Vercel.
+
+3. **Production host mismatch**
+   - Build checks `VERCEL_PROJECT_PRODUCTION_URL`. If your Vercel project is named something other than `officialmessengerx`, e.g. `massanger-git-arena-...`, it fails with:
+     ```
+     Refusing to build for "<other-host>"... chosen host is officialmessengerx.vercel.app
+     ```
+   - Fix: either rename Vercel project to `officialmessengerx`, or set `MESSENGERX_ACCEPT_SITE_HOST=<your-production-host>` in Vercel env (Production + Preview) **only if that host was explicitly agreed**. Ask before using a different name.
+
+4. **Service Worker PWA cache (old UI still shows after green Production)**
+   - Flutter PWAs install `flutter_service_worker.js` that caches entire old app.
+   - After a green Production deploy, you must:
+     - Hard reload: **Ctrl+Shift+R** (Windows/Linux) or **Cmd+Shift+R** (Mac)
+     - Open DevTools → Application → Clear Storage → Clear site data for `officialmessengerx.vercel.app`
+     - On mobile PWA: uninstall PWA, clear browser cache, re-add to Home Screen
+     - Open Preview URL in **Incognito / Private** window to bypass cache and verify new UI is there
+     - Check `/version.json` (no-cache) in browser: it shows git commit and build time of currently served build
+   - New `vercel.json` now sets `no-cache, no-store, must-revalidate` for `index.html`, `flutter_service_worker.js`, `manifest.json`, `version.json` to force browsers to fetch new UI.
+
+**How to promote Preview to Production:**
+
+- The green Preview URL (e.g. `https://massanger-git-arena-...-vercel.app`) proves new UI compiles.
+- To get it onto `https://officialmessengerx.vercel.app`:
+  1. Ensure fix commit (e.g. `b60ba0f` or later) is merged into `main`
+  2. Verify env vars enabled for Production (step 1 above)
+  3. Push to `main` or Redeploy Production in Vercel dashboard
+  4. Wait for Production row to turn green (3-4 min, first build may take 10-20 min due to Flutter SDK download)
+  5. Hard reload Production domain in Incognito
+
+**Build script now fails fast (<2 min) if env vars missing**, before downloading Flutter SDK, so you see the exact cause in Vercel logs without waiting 15 min.
+
 ## 1. What you type where (do not mix these up)
 
 | Place | Field | Value | What it is not |
