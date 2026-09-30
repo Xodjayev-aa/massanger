@@ -5,10 +5,8 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../app/di.dart';
 import '../../app/router.dart';
-import '../../core/discord_markdown.dart';
 import '../../core/errors.dart';
 import '../../data/shorts_repository.dart';
-import '../../data/telegram_repository.dart';
 import '../../data/video_repository.dart';
 import '../chats/chats_bloc.dart';
 import '../chats/chats_page.dart';
@@ -16,10 +14,10 @@ import '../profile/profile_page.dart';
 import '../shorts/shorts_page.dart';
 import '../shorts/youtube_feed_page.dart';
 
-/// Next-Gen Master Scaffold combining:
-/// 1. Top App Bar: YouTube + TikTok Hybrid (Logo + Realtime Status + Search + Profile)
-/// 2. Dual Feed Filters: [ 🎥 Videos ] (YouTube 16:9) vs [ ⚡ Shorts / Reels ] (TikTok 9:16)
-/// 3. Bottom Navigation: TikTok Control Panel Hybrid (Home, Shorts, [+] Action, Messages/Servers, You)
+/// Master scaffold combining:
+/// 1. Top App Bar (Logo + Realtime Status + Search + Telegram)
+/// 2. Dual Feed Filters: [ Videos ] (16:9) vs [ Shorts / Reels ] (9:16)
+/// 3. Bottom Navigation: Home, Shorts, [+] Upload, Messages, You
 class MainShellPage extends StatefulWidget {
   const MainShellPage({super.key});
 
@@ -29,12 +27,10 @@ class MainShellPage extends StatefulWidget {
 
 class _MainShellPageState extends State<MainShellPage> {
   int _currentIndex = 0; // 0: Home/Videos, 1: Shorts, 2: Create (modal), 3: Messages, 4: Profile
-  int _feedFormatIndex = 0; // 0: Videos (YouTube), 1: Shorts (TikTok)
+  int _feedFormatIndex = 0; // 0: Videos, 1: Shorts
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
     final chatsState = context.watch<ChatsBloc>().state;
     final totalUnread = chatsState.unreadTotal;
 
@@ -45,14 +41,14 @@ class _MainShellPageState extends State<MainShellPage> {
         child: IndexedStack(
           index: _currentIndex,
           children: <Widget>[
-            // Tab 0: Home with Dual Formats (YouTube Videos vs TikTok Shorts)
+            // Tab 0: Home with Dual Formats (Videos vs Shorts)
             _buildHomeFeed(),
             // Tab 1: Immersive Fullscreen Shorts Feed
             const ShortsPage(),
             // Tab 2: Placeholder for [+] Upload modal
             const SizedBox.shrink(),
-            // Tab 3: Telegram & Discord Messages
-            const ChatsPageBody(),
+            // Tab 3: Messages
+            const ChatsPage(),
             // Tab 4: Profile
             const ProfilePage(),
           ],
@@ -63,8 +59,6 @@ class _MainShellPageState extends State<MainShellPage> {
   }
 
   PreferredSizeWidget _buildTopAppBar(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
     return AppBar(
       titleSpacing: 16,
       title: Row(
@@ -74,7 +68,7 @@ class _MainShellPageState extends State<MainShellPage> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: <Color>[Color(0xFFFF0000), Color(0xFF5865F2)], // YouTube Red to Discord Blurple
+                colors: <Color>[Color(0xFFFF0000), Color(0xFF5865F2)],
               ),
               borderRadius: BorderRadius.circular(8),
             ),
@@ -125,14 +119,6 @@ class _MainShellPageState extends State<MainShellPage> {
           onPressed: () => context.push(Routes.search),
         ),
         IconButton(
-          tooltip: 'Notifications',
-          icon: const Badge(
-            smallSize: 8,
-            child: Icon(Icons.notifications_outlined),
-          ),
-          onPressed: () {},
-        ),
-        IconButton(
           tooltip: 'Telegram Bridge',
           icon: const Icon(Icons.send_rounded, size: 20),
           onPressed: () => context.push(Routes.telegram),
@@ -147,7 +133,7 @@ class _MainShellPageState extends State<MainShellPage> {
 
     return Column(
       children: <Widget>[
-        // Dual Content Filter Bar: [ 🎥 Videos ] vs [ ⚡ Shorts ]
+        // Dual Content Filter Bar: [ Videos ] vs [ Shorts ]
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
@@ -162,7 +148,7 @@ class _MainShellPageState extends State<MainShellPage> {
                   children: <Widget>[
                     Icon(Icons.video_collection_rounded, size: 16),
                     SizedBox(width: 6),
-                    Text('Videos (YouTube)'),
+                    Text('Videos'),
                   ],
                 ),
                 selected: _feedFormatIndex == 0,
@@ -225,7 +211,7 @@ class _MainShellPageState extends State<MainShellPage> {
             selectedIcon: Icon(Icons.smart_display_rounded),
             label: 'Shorts',
           ),
-          // TikTok Style Center [+] Action Button
+          // Center [+] Upload Action Button
           NavigationDestination(
             icon: Container(
               width: 44,
@@ -264,8 +250,6 @@ class _MainShellPageState extends State<MainShellPage> {
   }
 
   void _showUploadActionSheet(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
     showModalBottomSheet<void>(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -280,7 +264,7 @@ class _MainShellPageState extends State<MainShellPage> {
             children: <Widget>[
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Text('Create & Connect', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                child: Text('Upload Video', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               ),
               const SizedBox(height: 12),
               ListTile(
@@ -289,8 +273,8 @@ class _MainShellPageState extends State<MainShellPage> {
                   decoration: BoxDecoration(color: Colors.red.withAlpha(30), shape: BoxShape.circle),
                   child: const Icon(Icons.bolt_rounded, color: Colors.red),
                 ),
-                title: const Text('Create Short / Reel (TikTok)', style: TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: const Text('Vertical 9:16 clip up to 60 seconds'),
+                title: const Text('Create Short / Reel', style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text('Vertical MP4 clip up to 60 seconds'),
                 onTap: () {
                   Navigator.of(sheetContext).pop();
                   _pickAndUploadVideo(feedType: 'short');
@@ -302,24 +286,11 @@ class _MainShellPageState extends State<MainShellPage> {
                   decoration: BoxDecoration(color: const Color(0xFFFF0000).withAlpha(30), shape: BoxShape.circle),
                   child: const Icon(Icons.video_library_rounded, color: Color(0xFFFF0000)),
                 ),
-                title: const Text('Upload Long Video (YouTube)', style: TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: const Text('16:9 full-length video with title & description'),
+                title: const Text('Upload Video', style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text('MP4 video up to 60 seconds with title & description'),
                 onTap: () {
                   Navigator.of(sheetContext).pop();
                   _pickAndUploadVideo(feedType: 'long');
-                },
-              ),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: const Color(0xFF5865F2).withAlpha(30), shape: BoxShape.circle),
-                  child: const Icon(Icons.forum_rounded, color: Color(0xFF5865F2)),
-                ),
-                title: const Text('New Chat or Discord Channel', style: TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: const Text('Telegram direct chat or server #channel'),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  context.push(Routes.newChat());
                 },
               ),
             ],
@@ -331,72 +302,97 @@ class _MainShellPageState extends State<MainShellPage> {
 
   Future<void> _pickAndUploadVideo({required String feedType}) async {
     try {
-      final picked = await ImagePicker().pickVideo(source: ImageSource.gallery);
+      final configured = await sl<VideoRepository>().isConfigured();
+      if (!mounted) return;
+      if (!configured) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Video is not enabled on this deployment.')),
+        );
+        return;
+      }
+
+      final picked = await ImagePicker().pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(seconds: 60),
+      );
       if (picked == null || !mounted) return;
 
+      final titleController = TextEditingController();
+      final descController = TextEditingController();
       String? title;
       String? desc;
-
-      if (feedType == 'long') {
-        final titleController = TextEditingController();
-        final descController = TextEditingController();
+      try {
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (dContext) => AlertDialog(
-            title: const Text('Video Details'),
+            title: Text(feedType == 'long' ? 'Video Details' : 'Short Details'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 TextField(
                   controller: titleController,
                   autofocus: true,
-                  decoration: const InputDecoration(labelText: 'Title', hintText: 'Enter video title'),
+                  maxLength: 200,
+                  decoration: InputDecoration(
+                    labelText: feedType == 'long' ? 'Title' : 'Caption (optional)',
+                    hintText: feedType == 'long' ? 'Enter video title' : 'Add a caption',
+                    counterText: '',
+                  ),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: descController,
-                  maxLines: 3,
-                  decoration: const InputDecoration(labelText: 'Description', hintText: 'Use #hashtags and @mentions'),
-                ),
+                if (feedType == 'long') ...<Widget>[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descController,
+                    maxLines: 3,
+                    maxLength: 500,
+                    decoration: const InputDecoration(
+                      labelText: 'Description',
+                      hintText: 'Use #hashtags and @mentions',
+                      counterText: '',
+                    ),
+                  ),
+                ],
               ],
             ),
             actions: <Widget>[
-              TextButton(onPressed: () => Navigator.of(dContext).pop(false), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.of(dContext).pop(true), child: const Text('Publish')),
+              TextButton(
+                onPressed: () => Navigator.of(dContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dContext).pop(true),
+                child: const Text('Publish'),
+              ),
             ],
           ),
         );
         if (confirmed != true) return;
         title = titleController.text.trim();
         desc = descController.text.trim();
+      } finally {
+        titleController.dispose();
+        descController.dispose();
       }
 
+      if (!mounted) return;
       final scaffold = ScaffoldMessenger.of(context);
       scaffold.showSnackBar(const SnackBar(content: Text('Publishing video to Backblaze B2...')));
 
-      await sl<ShortsRepository>().publish(
+      final created = await sl<ShortsRepository>().publish(
         file: picked,
-        title: title,
-        description: desc,
-        caption: title ?? desc,
+        title: feedType == 'long' ? title : null,
+        description: feedType == 'long' ? desc : null,
+        caption: title != null && title.isNotEmpty ? title : desc,
         feedType: feedType,
       );
 
+      if (!mounted) return;
       scaffold.showSnackBar(const SnackBar(content: Text('Video published successfully!')));
+      await context.push(Routes.video(created.id), extra: created);
     } on AppException catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Upload failed.')));
     }
-  }
-}
-
-/// Standalone body for Chats with Discord/Telegram view switcher
-class ChatsPageBody extends StatelessWidget {
-  const ChatsPageBody({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const ChatsPage();
   }
 }

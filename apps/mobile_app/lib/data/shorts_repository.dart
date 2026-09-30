@@ -166,6 +166,40 @@ class ShortsRepository {
     }
   }
 
+  /// Loads a single video by id for `/video/:id` deep links and shared URLs.
+  Future<ShortVideo?> getById(String id) async {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) return null;
+    try {
+      final row = await _client
+          .from('shorts')
+          .select(_rowColumns)
+          .eq('id', trimmed)
+          .maybeSingle();
+      if (row == null) return null;
+      final shorts = <ShortVideo>[ShortVideo.fromMap(Map<String, dynamic>.from(row))];
+      final uid = _uidOrNull;
+      await Future.wait(<Future<void>>[
+        _authorDirectory(<String>{shorts.first.authorId}, shorts),
+        if (uid != null)
+          _client
+              .from('short_likes')
+              .select('short_id')
+              .eq('user_id', uid)
+              .eq('short_id', shorts.first.id)
+              .maybeSingle()
+              .then((likeRow) {
+                if (likeRow != null) {
+                  shorts[0] = shorts[0].copyWith(likedByMe: true);
+                }
+              }),
+      ]);
+      return shorts.first;
+    } catch (error, stack) {
+      throw AppException.wrap(error, stack);
+    }
+  }
+
   /// Increments view count on a video.
   Future<void> recordView(String videoId) async {
     try {
@@ -253,6 +287,9 @@ class ShortsRepository {
 
   /// Watch a short: presigned GET, scope derived from the key.
   Future<String> watchUrl(ShortVideo short) => _videos.playbackUrl(key: short.key);
+
+  /// Download a short/video: presigned GET with attachment disposition.
+  Future<String> downloadUrl(ShortVideo short) => _videos.downloadUrl(key: short.key);
 
   String get _uid {
     final uid = _uidOrNull;

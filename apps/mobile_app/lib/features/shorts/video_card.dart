@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/router.dart';
 import '../../core/discord_markdown.dart';
 import '../../core/formatting.dart';
 import '../../data/shorts_repository.dart';
-import 'video_player_screen.dart';
 
-/// YouTube-style video card:
-/// - 16:9 thumbnail preview with duration badge
-/// - Author avatar with online indicator and Discord role badge
+/// Feed video card:
+/// - 16:9 preview box with duration badge
+/// - Author avatar and Discord role badge
 /// - Video title, view count, timestamp
-/// - Quick context menu (Share, Copy Link)
+/// - Context menu for opening or copying the shareable `/video/:id` link
 class VideoCard extends StatelessWidget {
   const VideoCard({
     super.key,
@@ -24,18 +24,10 @@ class VideoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final scheme = Theme.of(context).colorScheme;
 
     return InkWell(
-      onTap: onTap ??
-          () {
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => VideoPlayerScreen(video: video),
-              ),
-            );
-          },
+      onTap: onTap ?? () => context.push(Routes.video(video.id), extra: video),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -176,6 +168,7 @@ class VideoCard extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.more_vert_rounded, size: 20),
                   onPressed: () {
+                    final link = DiscordMarkdown.shareVideoUrl(video.id);
                     showModalBottomSheet<void>(
                       context: context,
                       builder: (sheetContext) => SafeArea(
@@ -183,21 +176,25 @@ class VideoCard extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             ListTile(
-                              leading: const Icon(Icons.share_rounded),
-                              title: const Text('Share Video'),
-                              onTap: () => Navigator.of(sheetContext).pop(),
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.playlist_add_rounded),
-                              title: const Text('Save to Watch Later'),
-                              onTap: () => Navigator.of(sheetContext).pop(),
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.send_rounded),
-                              title: const Text('Send to Chat (Telegram / Discord)'),
+                              leading: const Icon(Icons.play_circle_outline_rounded),
+                              title: const Text('Open Video'),
                               onTap: () {
                                 Navigator.of(sheetContext).pop();
-                                context.push(Routes.chats);
+                                context.push(Routes.video(video.id), extra: video);
+                              },
+                            ),
+                            ListTile(
+                              leading: const Icon(Icons.link_rounded),
+                              title: const Text('Copy Video Link'),
+                              subtitle: Text(link, maxLines: 1, overflow: TextOverflow.ellipsis),
+                              onTap: () async {
+                                await Clipboard.setData(ClipboardData(text: link));
+                                if (!sheetContext.mounted) return;
+                                Navigator.of(sheetContext).pop();
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Video link copied to clipboard.')),
+                                );
                               },
                             ),
                           ],

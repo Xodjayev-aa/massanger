@@ -1,12 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../app/di.dart';
-import '../../app/router.dart';
 import '../../core/errors.dart';
 import '../../data/shorts_repository.dart';
-import '../../data/video_repository.dart';
 import 'video_card.dart';
 
 /// YouTube-style Home Video Feed:
@@ -128,13 +124,13 @@ class _YouTubeFeedPageState extends State<YouTubeFeedPage> with SingleTickerProv
                                 Text(
                                   _following
                                       ? 'No videos from people you follow yet'
-                                      : 'No long-form videos published yet',
+                                      : 'No videos published yet',
                                   style: theme.textTheme.titleMedium,
                                   textAlign: TextAlign.center,
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
-                                  'Tap the center + button to upload the first long video.',
+                                  'Tap the center + button to upload the first video.',
                                   style: TextStyle(color: scheme.onSurfaceVariant),
                                   textAlign: TextAlign.center,
                                 ),

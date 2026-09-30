@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../data/shorts_repository.dart';
 import '../features/auth/auth_bloc.dart';
 import '../features/auth/gate_page.dart';
 import '../features/auth/sign_in_page.dart';
 import '../features/chat/chat_page.dart';
-import '../features/chats/chats_page.dart';
 import '../features/chats/main_shell_page.dart';
 import '../features/chats/new_chat_page.dart';
 import '../features/chats/universal_search_page.dart';
 import '../features/profile/profile_page.dart';
 import '../features/shorts/shorts_page.dart';
+import '../features/shorts/video_player_screen.dart';
 import '../features/telegram/link_page.dart';
 import '../features/telegram/telegram_page.dart';
 
@@ -30,6 +31,7 @@ class Routes {
 
   static String chat(String chatId) => '$chats/$chatId';
   static String newChat({String? username}) => username == null ? '$chats/new' : '$chats/new?username=$username';
+  static String video(String videoId) => '/video/$videoId';
 }
 
 /// [auth] drives the redirect: an authenticated user never sees the sign-in page,
@@ -73,6 +75,16 @@ GoRouter buildRouter(AuthBloc auth, Listenable refresh) {
       GoRoute(path: Routes.gate, builder: (context, state) => const GatePage()),
       GoRoute(path: Routes.search, builder: (context, state) => const UniversalSearchPage()),
       GoRoute(path: Routes.shorts, builder: (context, state) => const ShortsPage()),
+      GoRoute(
+        path: '/video/:id',
+        builder: (context, state) {
+          final extra = state.extra;
+          return VideoPlayerScreen(
+            videoId: state.pathParameters['id'] ?? '',
+            video: extra is ShortVideo ? extra : null,
+          );
+        },
+      ),
       GoRoute(path: Routes.telegram, builder: (context, state) => const TelegramPage()),
       GoRoute(path: Routes.telegramLink, builder: (context, state) => const LinkPage()),
       GoRoute(path: Routes.profile, builder: (context, state) => const ProfilePage()),

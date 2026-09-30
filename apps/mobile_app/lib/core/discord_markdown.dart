@@ -1,10 +1,13 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+
+import '../app/router.dart';
 
 /// Discord-style markdown and mention parser for messages and video captions.
 /// Parses:
 /// - `@username` mentions (styled with discord blue/blurple and clickable)
 /// - `#channel` tags (styled with discord hashtag badge)
+/// - `/video/:id` app video URLs (clickable and routed in-app)
 /// - `**bold**`
 /// - `*italic*`
 /// - `~~strike~~`
@@ -13,18 +16,47 @@ import 'package:flutter/material.dart';
 class DiscordMarkdown {
   const DiscordMarkdown._();
 
+  static final RegExp _videoRoutePattern = RegExp(r'^/video/([0-9a-fA-F-]{36})$');
+
+  static String shareVideoUrl(String videoId) {
+    final path = Routes.video(videoId);
+    final base = Uri.base;
+    if ((base.scheme == 'http' || base.scheme == 'https') && base.hasAuthority) {
+      return '${base.origin}$path';
+    }
+    return path;
+  }
+
+  static String? _extractAppVideoId(String raw) {
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return null;
+    if (uri.hasScheme || uri.hasAuthority) {
+      if (uri.scheme != 'http' && uri.scheme != 'https') return null;
+      final base = Uri.base;
+      if ((base.scheme == 'http' || base.scheme == 'https') &&
+          base.hasAuthority &&
+          uri.origin != base.origin) {
+        return null;
+      }
+    }
+    final match = _videoRoutePattern.firstMatch(uri.path);
+    return match?.group(1);
+  }
+
   static List<InlineSpan> parse(
     String text, {
     required BuildContext context,
     TextStyle? style,
     void Function(String user)? onMentionTap,
     void Function(String channel)? onChannelTap,
+    void Function(String videoId)? onVideoTap,
   }) {
     final theme = Theme.of(context);
     final baseStyle = style ?? theme.textTheme.bodyMedium ?? const TextStyle(fontSize: 14);
     final spans = <InlineSpan>[];
 
-    // Regex matching @mentions, #channels, code blocks, bold, italic, strike
+    // Regex matching code blocks, inline code, bold, italic, strike, underline,
+    // app /video/:id links, @mentions, and #channels.
     final regex = RegExp(
       r'(`{3}[\s\S]*?`{3})|' // 1: code block
       r'(`[^`]+`)|' // 2: inline code
@@ -32,8 +64,9 @@ class DiscordMarkdown {
       r'(\*[^*]+\*)|' // 4: italic
       r'(~~[^~]+~~)|' // 5: strikethrough
       r'(__[^_]+__)|' // 6: underline
-      r'(@[a-zA-Z0-9_.]+)|' // 7: @mention
-      r'(#[a-zA-Z0-9_-]+)', // 8: #channel
+      r'((?:https?://[^\s<>()]+)?/video/[0-9a-fA-F-]{36})\b|' // 7: /video/:id link
+      r'(@[a-zA-Z0-9_.]+)|' // 8: @mention
+      r'(#[a-zA-Z0-9_-]+)', // 9: #channel
       multiLine: true,
     );
 
@@ -105,6 +138,52 @@ class DiscordMarkdown {
           style: baseStyle.copyWith(decoration: TextDecoration.underline),
         ));
       } else if (match.group(7) != null) {
+        // App /video/:id link
+        final videoId = _extractAppVideoId(raw);
+        if (videoId == null) {
+          spans.add(TextSpan(text: raw, style: baseStyle));
+        } else {
+          spans.add(WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: InkWell(
+              onTap: () {
+                if (onVideoTap != null) {
+                  onVideoTap(videoId);
+                } else {
+                  context.push(Routes.video(videoId));
+                }
+              },
+              borderRadius: BorderRadius.circular(4),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withAlpha(35),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(Icons.play_circle_outline_rounded, size: 14, color: theme.colorScheme.primary),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        raw,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                          decoration: TextDecoration.underline,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ));
+        }
+      } else if (match.group(8) != null) {
         // @mention
         final username = raw.substring(1);
         spans.add(WidgetSpan(
@@ -129,7 +208,7 @@ class DiscordMarkdown {
             ),
           ),
         ));
-      } else if (match.group(8) != null) {
+      } else if (match.group(9) != null) {
         // #channel
         final channel = raw.substring(1);
         spans.add(WidgetSpan(

@@ -37,6 +37,8 @@ export type PresignInput = Readonly<{
   /** Object key, already validated as a relative path (no `..`, no leading `/`). */
   key: string;
   expiresInSeconds: number;
+  /** Optional `response-content-disposition` query override for GET downloads. */
+  responseContentDisposition?: string;
   /** Signing instant; injectable so tests are deterministic. */
   now?: Date;
 }>;
@@ -138,6 +140,9 @@ export async function presignS3(cfg: S3Config, input: PresignInput): Promise<str
     'X-Amz-Expires': String(input.expiresInSeconds),
     'X-Amz-SignedHeaders': 'host',
   };
+  if (method === 'GET' && input.responseContentDisposition) {
+    query['response-content-disposition'] = input.responseContentDisposition;
+  }
   const canonicalQuery = Object.keys(query)
     .sort()
     .map((name) => `${escapeUri(name)}=${escapeUri(query[name] ?? '')}`)
