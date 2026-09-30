@@ -5,6 +5,7 @@ import 'package:video_player/video_player.dart';
 
 import '../../app/di.dart';
 import '../../app/router.dart';
+import '../../core/discord_markdown.dart';
 import '../../core/errors.dart';
 import '../../data/shorts_repository.dart';
 import '../../data/video_repository.dart';
@@ -419,6 +420,26 @@ class _ShortViewState extends State<_ShortView> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
+                // Channel Avatar with Discord Role Badge
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: scheme.primaryContainer,
+                  child: Text(
+                    (widget.short.authorName ?? 'U').substring(0, 1).toUpperCase(),
+                    style: TextStyle(fontWeight: FontWeight.bold, color: scheme.onPrimaryContainer),
+                  ),
+                ),
+                if (widget.short.authorRoleBadge != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, bottom: 8),
+                    child: DiscordRoleBadge(
+                      badge: widget.short.authorRoleBadge!,
+                      colorHex: widget.short.authorRoleColor,
+                      compact: true,
+                    ),
+                  )
+                else
+                  const SizedBox(height: 12),
                 IconButton(
                   tooltip: _muted ? 'Sound on' : 'Mute',
                   onPressed: _toggleMute,
@@ -451,6 +472,52 @@ class _ShortViewState extends State<_ShortView> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                // Comment affordance
+                IconButton(
+                  tooltip: 'Comments',
+                  onPressed: () {
+                    showModalBottomSheet<void>(
+                      context: context,
+                      backgroundColor: const Color(0xFF1E1F22),
+                      shape: const RoundedRectangleBorder(
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                      ),
+                      builder: (sheetContext) => SafeArea(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              const Text('Comments', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                              const SizedBox(height: 16),
+                              const Text('Be the first to comment on this short!', style: TextStyle(color: Colors.white70)),
+                              const SizedBox(height: 16),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.chat_bubble_rounded,
+                    color: Colors.white,
+                    shadows: <Shadow>[Shadow(blurRadius: 8, color: Colors.black54)],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Share to Telegram / Discord affordance
+                IconButton(
+                  tooltip: 'Share',
+                  onPressed: () {
+                    context.push(Routes.chats);
+                  },
+                  icon: const Icon(
+                    Icons.send_rounded,
+                    color: Colors.white,
+                    shadows: <Shadow>[Shadow(blurRadius: 8, color: Colors.black54)],
+                  ),
                 ),
               ],
             ),

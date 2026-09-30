@@ -583,6 +583,10 @@ final class DirectoryEntry {
     this.telegramUsername,
     this.isOnline = false,
     this.lastSeenAt,
+    this.discriminator,
+    this.roleBadge,
+    this.roleColor,
+    this.customStatus,
   });
 
   final String id;
@@ -594,6 +598,10 @@ final class DirectoryEntry {
   final String? telegramUsername;
   final bool isOnline;
   final DateTime? lastSeenAt;
+  final int? discriminator;
+  final String? roleBadge;
+  final String? roleColor;
+  final String? customStatus;
 
   String? get avatar => avatarPath ?? avatarExternalUrl;
 
@@ -607,6 +615,10 @@ final class DirectoryEntry {
         telegramUsername: map['telegram_username'] as String?,
         isOnline: asBool(map['is_online']),
         lastSeenAt: parseTimestamp(map['last_seen_at']),
+        discriminator: map['discriminator'] as int?,
+        roleBadge: map['role_badge'] as String? ?? 'Member',
+        roleColor: map['role_color'] as String? ?? '#5865F2',
+        customStatus: map['custom_status'] as String?,
       );
 }
 

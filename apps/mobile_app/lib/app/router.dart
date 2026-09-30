@@ -6,6 +6,7 @@ import '../features/auth/gate_page.dart';
 import '../features/auth/sign_in_page.dart';
 import '../features/chat/chat_page.dart';
 import '../features/chats/chats_page.dart';
+import '../features/chats/main_shell_page.dart';
 import '../features/chats/new_chat_page.dart';
 import '../features/chats/search_page.dart';
 import '../features/profile/profile_page.dart';
@@ -77,7 +78,7 @@ GoRouter buildRouter(AuthBloc auth, Listenable refresh) {
       GoRoute(path: Routes.profile, builder: (context, state) => const ProfilePage()),
       GoRoute(
         path: Routes.chats,
-        builder: (context, state) => const ChatsPage(),
+        builder: (context, state) => const MainShellPage(),
         routes: <RouteBase>[
           // Children keep '/chats/new' and '/chats/:id' from competing: a literal
           // segment is matched before the parameter, and both stay under one shell.
