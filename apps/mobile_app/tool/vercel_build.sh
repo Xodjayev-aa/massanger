@@ -39,7 +39,7 @@ install_download_tools() {
   command -v xz >/dev/null 2>&1 || missing+=(xz)
   command -v git >/dev/null 2>&1 || missing+=(git)
   command -v unzip >/dev/null 2>&1 || missing+=(unzip)
-  if (("${#missing[@]} == 0")); then
+  if (( "${#missing[@]} == 0" )); then
     return 0
   fi
   printf 'Installing download tools missing from this build image: %s\n' "${missing[*]}"
@@ -137,7 +137,45 @@ prepare_flutter() {
   export FLUTTER_SUPPRESS_ANALYTICS=true
   export PUB_CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
   flutter config --no-analytics --enable-web >/dev/null
-  flutter precache --web
+  # precache can fail transiently on storage.googleapis.com — retry a few times
+  # so a blip does not turn a Production deploy red.
+  local attempt=0
+  until flutter precache --web; do
+    attempt=$((attempt+1))
+    if (( attempt >= 3 )); then
+      printf 'flutter precache --web failed after %d attempts\n' "$attempt" >&2
+      exit 1
+    fi
+    printf 'flutter precache failed, retry %d/3 in 5s...\n' "$attempt"
+    sleep 5
+  done
+}
+
+log_vercel_env_presence() {
+  if [[ "${VERCEL:-}" != "1" ]]; then
+    return 0
+  fi
+  printf 'Vercel build env: VERCEL_ENV=%s VERCEL_PROJECT_PRODUCTION_URL=%s\n' \
+    "${VERCEL_ENV:-unset}" "${VERCEL_PROJECT_PRODUCTION_URL:-unset}"
+  printf 'Env presence (values redacted):\n'
+  for name in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_PUBLISHABLE_KEY WEB_REDIRECT_URL PUBLIC_SITE_URL MESSENGERX_ACCEPT_SITE_HOST TELEGRAM_OIDC_ENABLED; do
+    if [[ -n "${!name:-}" ]]; then
+      printf '  %s=SET\n' "$name"
+    else
+      printf '  %s=UNSET\n' "$name"
+    fi
+  done
+  local forbidden_set=()
+  for name in SUPABASE_SERVICE_ROLE_KEY SUPABASE_SECRET_KEY SUPABASE_JWT_SECRET SUPABASE_DB_PASSWORD GOOGLE_OAUTH_CLIENT_SECRET GOOGLE_CLIENT_SECRET TELEGRAM_API_HASH TELEGRAM_BOT_TOKEN TELEGRAM_BOT_SECRET BOT_TOKEN SEAL_KEY LINK_PAYLOAD_KEY BRIDGE_TOKEN BRIDGE_HMAC_SECRET TDLIB_DB_KEY; do
+    if [[ -n "${!name:-}" ]]; then
+      forbidden_set+=("$name")
+    fi
+  done
+  if (( ${#forbidden_set[@]} > 0 )); then
+    printf 'FORBIDDEN env vars present (must be removed from Vercel Production): %s\n' "${forbidden_set[*]}"
+  else
+    printf 'No forbidden secret env vars detected.\n'
+  fi
 }
 
 cmd_install() {
@@ -154,6 +192,30 @@ cmd_build() {
     exit 2
   fi
   need_node
+
+  # Fail fast on Vercel if public env is missing, BEFORE downloading Flutter.
+  # This makes Production vs Preview mis-scoping obvious in <2 min instead of
+  # after a 15-min SDK download. The full check still runs after Flutter is ready.
+  if [[ "$placeholder" == false ]]; then
+    log_vercel_env_presence
+    printf 'Running fast pre-check of public env (before Flutter download)...\n'
+    if ! node "$config_js" write-defines --out /dev/null; then
+      printf '\n=== Vercel Production Build Failed Early ===\n' >&2
+      printf 'The public env check above failed.\n' >&2
+      printf 'Common causes for Production red errors while Preview is green:\n' >&2
+      printf '  1. SUPABASE_URL / SUPABASE_ANON_KEY set only for Preview, not Production.\n' >&2
+      printf '     Vercel -> Settings -> Environment Variables -> enable for Production.\n' >&2
+      printf '  2. A secret like SUPABASE_SERVICE_ROLE_KEY is set for Production.\n' >&2
+      printf '     Remove all forbidden secrets from Vercel; only public anon key belongs in web.\n' >&2
+      printf '  3. VERCEL_PROJECT_PRODUCTION_URL is not officialmessengerx.vercel.app\n' >&2
+      printf '     and MESSENGERX_ACCEPT_SITE_HOST was not set to that exact host.\n' >&2
+      printf 'See docs/vercel.md §1-2 for the exact variable list.\n' >&2
+      printf 'If you see a green Preview deploy but red Production, open that Preview URL in Incognito to verify new UI is there.\n' >&2
+      exit 1
+    fi
+    printf 'Fast pre-check passed. Proceeding to Flutter SDK...\n'
+  fi
+
   prepare_flutter
   # Global so the EXIT trap can still see it after this function returns.
   # A local would be unset by then, and `set -u` would fail the build after
@@ -175,9 +237,22 @@ cmd_build() {
       --dart-define-from-file="$MX_DEFINES"
   )
   node "$config_js" verify-output --dir "$app_dir/build/web"
+  # Write a version.json for cache-busting and debugging Production vs Preview.
+  # This file is explicitly set to no-cache in vercel.json, so browsers always
+  # fetch the latest build id. Useful to verify that Production actually updated.
+  local build_id
+  build_id=$(git -C "$app_dir/../.." rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  local built_at
+  built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"version":"%s","builtAt":"%s","flutter":"%s","host":"%s"}\n' \
+    "$build_id" "$built_at" "$FLUTTER_VERSION" "${VERCEL_PROJECT_PRODUCTION_URL:-local}" \
+    > "$app_dir/build/web/version.json"
+  printf 'Wrote version.json: %s @ %s\n' "$build_id" "$built_at"
   printf 'Flutter web release is at %s (base href /, service worker present).\n' "$app_dir/build/web"
   if [[ "$placeholder" == false ]]; then
     printf 'OAuth return is the site root. Supabase redirect URLs and the Google JavaScript origin must match it. This script does not change Supabase and does not start a Telegram worker.\n'
+    printf 'If this was a Production deploy, Vercel will now serve this build at https://officialmessengerx.vercel.app/\n'
+    printf 'PWA cache note: Flutter installs flutter_service_worker.js that caches old UI. After deploy, hard reload (Ctrl+Shift+R) and clear site data for the domain to see new UI.\n'
   fi
 }
 
