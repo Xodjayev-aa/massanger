@@ -170,7 +170,7 @@ security definer
 set search_path = pg_catalog, public
 as $$
 begin
-  if not app.is_service_role() then
+  if not app.caller_is_service_role() then
     raise exception 'service_role only' using errcode = '42501';
   end if;
 
@@ -207,7 +207,7 @@ as $$
 declare
   v_chat uuid;
 begin
-  if not app.is_service_role() then
+  if not app.caller_is_service_role() then
     raise exception 'service_role only' using errcode = '42501';
   end if;
 
@@ -312,7 +312,7 @@ security definer
 set search_path = pg_catalog, public
 as $$
 begin
-  if not app.is_service_role() then
+  if not app.caller_is_service_role() then
     raise exception 'service_role only' using errcode = '42501';
   end if;
 
@@ -346,7 +346,7 @@ declare
   v_boundary   uuid;
   v_inserted   integer;
 begin
-  if not app.is_service_role() then
+  if not app.caller_is_service_role() then
     raise exception 'service_role only' using errcode = '42501';
   end if;
 

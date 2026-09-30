@@ -18,6 +18,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
+import { registerNewFeatureTests } from './new_features.tests.mjs';
+import { registerBotTests } from './bot_platform.tests.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
@@ -143,11 +145,15 @@ await test('auth.users trigger creates profiles + a telegram_accounts row', asyn
     insert into auth.users (id, phone, raw_app_meta_data, raw_user_meta_data) values
       ('${U.link}', '+9989017778899', '{"provider":"phone"}', '{"full_name":"Link Tester"}');
   `);
-  eq(await scalar(`select count(*)::int from public.profiles`), 5, 'profiles created');
+  // 5 fixtures + @BotFather, which 00026 provisions so bot creation works on a
+  // fresh install with no deploy step.
+  eq(await scalar(`select count(*)::int from public.profiles`), 6, 'profiles created');
+  eq(await scalar(`select account_kind from public.profiles where username = 'botfather'`), 'system',
+     'BotFather is provisioned by the bot platform migration');
   eq(await scalar(`select access_state::text from public.profiles where id = '${U.a}'`), 'active');
   eq(await scalar(`select access_state::text from public.profiles where id = '${U.gated}'`),
      'active', 'Google signups no longer use unprovable account-age checks');
-  eq(await scalar(`select count(*)::int from public.telegram_accounts`), 5, 'one link row per user');
+  eq(await scalar(`select count(*)::int from public.telegram_accounts`), 6, 'one link row per user');
   eq(await scalar(`select username from public.profiles where id = '${U.a}'`), 'aziz_carrier',
      'username derived from full name');
 });
@@ -2293,6 +2299,20 @@ await test('deleting a short cascades its likes and clears the feed', async () =
   await exec(`delete from public.shorts where id = '${shortId}'`);
   eq(Number(await scalar(`select count(*)::int from public.shorts`)), 0, 'row gone');
   eq(Number(await scalar(`select count(*)::int from public.short_likes`)), 0, 'likes cascaded');
+});
+
+// ---------------------------------------------------------------------------
+group('new engines (00020-00025)');
+await registerNewFeatureTests({
+  test, group, eq, assert, throws, exec, query, one, scalar,
+  become, becomeService, becomeOwner, U, rpc,
+});
+
+// ---------------------------------------------------------------------------
+group('bot platform (00026)');
+await registerBotTests({
+  test, group, eq, assert, throws, exec, query, one, scalar,
+  become, becomeService, becomeOwner, U, rpc,
 });
 
 // ---------------------------------------------------------------------------

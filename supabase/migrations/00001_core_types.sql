@@ -211,6 +211,23 @@ as $$
   );
 $$;
 
+-- Is this write/statement running in *trusted server code*?
+--
+-- True when the session itself is a privileged role (a migration, a maintenance
+-- script, the service key) **or** when the code executing right now is owned by
+-- the migration role — i.e. inside one of this schema's SECURITY DEFINER
+-- functions, whose current_user is `postgres` no matter who called it.
+--
+-- That second half is deliberate and load-bearing: the guards on
+-- profiles/messages/telegram_accounts use it to let server-side bookkeeping
+-- (counters, tombstones, delivery state) through while keeping a *client's own*
+-- writes on the narrow path.
+--
+--   use app.is_service_role()        → "may this write bypass the client guard?"
+--   use app.caller_is_service_role() → "is the person on the other end staff?"
+--
+-- Authorization decisions must use the second one: inside a definer function
+-- current_user is the owner, so the first one answers yes for every caller.
 create or replace function app.is_service_role()
 returns boolean
 language sql
@@ -222,6 +239,36 @@ as $$
       or coalesce(app.jwt_claim('role'), '') in ('service_role', 'supabase_admin')
       or coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), '') = 'service_role';
 $$;
+
+comment on function app.is_service_role() is
+  'Trusted-write context: true for privileged sessions and for any code running inside an owner-owned SECURITY DEFINER function. Never use for authorization — use app.caller_is_service_role().';
+
+-- Is the *caller of the request* the service role? Reads the assumed role (the
+-- `role` GUC, which survives SECURITY DEFINER) and the JWT claim, never
+-- current_user. This is the honest check to gate staff-only actions on.
+create or replace function app.caller_is_service_role()
+returns boolean
+language sql
+stable
+set search_path = pg_catalog
+as $$
+  select case
+    when coalesce(nullif(current_setting('role', true), ''), 'none')
+         in ('service_role', 'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin')
+      then true
+    when coalesce(app.jwt_claim('role'), '') in ('service_role', 'supabase_admin') then true
+    when coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), '') = 'service_role' then true
+    -- No role was assumed at all: a direct psql / dashboard / migration session
+    -- as the database owner is the service role.
+    when coalesce(nullif(current_setting('role', true), ''), 'none') in ('none', 'postgres')
+         and current_user::text in ('postgres', 'supabase_admin', 'service_role')
+      then true
+    else false
+  end;
+$$;
+
+comment on function app.caller_is_service_role() is
+  'True only when the request itself runs as the service role. Safe inside SECURITY DEFINER functions; the caller cannot spoof it through the call stack.';
 
 -- The role of the *request*, not of the current function. Needed inside
 -- SECURITY DEFINER code (triggers), where current_user is the owner: a client
