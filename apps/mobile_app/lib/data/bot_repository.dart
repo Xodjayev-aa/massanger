@@ -116,7 +116,7 @@ class InlineResult {
   final String title;
   final String? description;
   final String? body;
-  final Map<String, dynamic> media;
+  final Map<String, dynamic>? media;
   final String? thumbUrl;
 
   factory InlineResult.fromMap(Map<String, dynamic> map) => InlineResult(

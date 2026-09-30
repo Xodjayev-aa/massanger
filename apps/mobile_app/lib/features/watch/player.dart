@@ -268,7 +268,8 @@ class _VideoSurfaceState extends State<VideoSurface> {
                           ),
                       ],
                     ),
-      ),
+                  ),
+                ),
     );
   }
 }

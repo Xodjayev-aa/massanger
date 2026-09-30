@@ -683,9 +683,16 @@ class InlineFailure extends StatelessWidget {
 /// The voice-over studio, in a sheet.
 ///
 /// Three things happen here and nothing else: pick a device voice, listen to the
-/// script, then store the script as a sound. The audio itself is *not* uploaded —
-/// for the reason in `VoiceOverService`, the device is the free speech engine and
-/// the script is what makes the sound portable.
+/// script, then store it as a sound.
+///
+/// The sound always carries the **script**, which is what makes the feature
+/// free and portable: any device can re-render the same words with its own
+/// speech engine, and no paid TTS service is anywhere in the loop. When the
+/// device can also write an audio file (Android and iOS can; the web build
+/// cannot), the rendered bytes are uploaded through the `sound` scope of
+/// `video-ticket` so the reel has real audio too — every player can then play
+/// it without a speech engine. When it cannot, the row keeps the script and the
+/// UI says so instead of pretending.
 class _VoiceOverSheet extends StatefulWidget {
   const _VoiceOverSheet({required this.initialScript});
 
@@ -773,12 +780,32 @@ class _VoiceOverSheetState extends State<_VoiceOverSheet> {
     final seconds = (words / 2.6).clamp(3, 600).toDouble();
     final duration = Duration(milliseconds: (seconds * 1000).round());
     final title = _title.text.trim().isEmpty ? 'AI voice-over' : _title.text.trim();
+
     try {
+      // 1. Render the audio on this device, when it can. A failure here is not
+      //    a failure of the feature: the script is the portable half.
+      var objectKey = 'sounds/$uid/tts/${const Uuid().v4()}.mp3';
+      var sizeBytes = (seconds * 16000).round().clamp(4096, 50 * 1024 * 1024);
+      var mime = 'audio/mpeg';
+      if (sl<VoiceOverService>().canSynthesize) {
+        final uploaded = await _renderToSound(
+          script: script,
+          duration: duration,
+          fallbackBytes: sizeBytes,
+        );
+        if (uploaded != null) {
+          objectKey = uploaded.key;
+          sizeBytes = uploaded.sizeBytes;
+          mime = uploaded.mime;
+        }
+      }
+
       final soundId = await sl<FeedRepository>().createSound(
         title: title,
         duration: duration,
-        sizeBytes: (seconds * 16000).round().clamp(4096, 50 * 1024 * 1024),
-        objectKey: 'sounds/$uid/tts/${const Uuid().v4()}.mp3',
+        sizeBytes: sizeBytes,
+        objectKey: objectKey,
+        mime: mime,
         origin: 'tts',
         voiceScript: script,
         voiceName: _voice?.name,
@@ -794,6 +821,60 @@ class _VoiceOverSheetState extends State<_VoiceOverSheet> {
         });
       }
     }
+  }
+
+  /// Speaks the script into a file and uploads it as a sound.
+  ///
+  /// Returns null — never an exception — when this device cannot produce a
+  /// container the sounds table accepts, because that is a normal outcome (the
+  /// web build, and iOS writing `.caf`): the caller keeps the script-only row.
+  Future<({String key, int sizeBytes, String mime})?> _renderToSound({
+    required String script,
+    required Duration duration,
+    required int fallbackBytes,
+  }) async {
+    try {
+      final voice = _voice;
+      if (voice != null) await sl<VoiceOverService>().select(voice);
+      final path = await sl<VoiceOverService>().synthesizeToFile(script, name: 'voice-over');
+      if (path == null) return null;
+      final mime = _audioMimeFor(path);
+      if (mime == null) return null;
+
+      // XFile reads a path on every platform the app ships on, and it keeps
+      // `dart:io` out of this file so the web build still compiles.
+      final bytes = await XFile(path).readAsBytes();
+      if (bytes.isEmpty) return null;
+
+      final tickets = sl<VideoRepository>();
+      final ticket = await tickets.requestUpload(
+        scope: VideoScope.sound,
+        sizeBytes: bytes.length,
+        duration: duration,
+        mime: mime,
+      );
+      await VideoRepository.putBytes(url: ticket.url, bytes: bytes, contentType: ticket.contentType);
+      final verified = await tickets.confirm(scope: VideoScope.sound, key: ticket.key);
+      return (
+        key: verified.key,
+        sizeBytes: verified.sizeBytes > 0 ? verified.sizeBytes : fallbackBytes,
+        mime: mime,
+      );
+    } catch (_) {
+      // The row still works: it carries the script.
+      return null;
+    }
+  }
+
+  /// The three containers `video-ticket` and `public.sounds` both accept.
+  /// Anything else (notably iOS's `.caf`) means "keep the script, skip the
+  /// bytes" rather than an upload that would be rejected server-side.
+  static String? _audioMimeFor(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.mp3')) return 'audio/mpeg';
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.ogg') || lower.endsWith('.opus')) return 'audio/ogg';
+    return null;
   }
 
   @override
@@ -815,6 +896,18 @@ class _VoiceOverSheetState extends State<_VoiceOverSheet> {
             'This device speaks the script — no paid service, no upload of your voice. The script is stored with the post '
             'so anybody can re-render the same voice-over, and your clip keeps its own audio as a fallback.',
             style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant, height: 1.4),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            sl<VoiceOverService>().canSynthesize
+                ? 'This device also renders the audio itself, so the reel plays with a real voice track everywhere.'
+                : 'This device cannot write an audio file, so the reel carries the script and every phone re-renders it.',
+            style: TextStyle(
+              fontSize: 12,
+              color: scheme.primary,
+              height: 1.4,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(height: 14),
           TextField(

@@ -2,6 +2,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/errors.dart';
 import 'social_models.dart';
+// ChannelSummary and CommunitySummary are the row shapes the channel and
+// community directories return; they live with the rest of the social models.
+import 'social_repository.dart';
 
 /// Permissions as the database stores them: one bigint bit per capability.
 /// The mirrors here exist so the UI can hide what the server would refuse —

@@ -77,10 +77,28 @@ const IMAGE_TYPES: Record<string, string> = {
   'image/png': 'png',
 };
 
-type Scope = 'chat' | 'short' | 'video';
+/**
+ * A voice-over / soundtrack file. The caps are `public.sounds`' own limits, so
+ * the ticket can never mint a ticket for bytes the row would refuse to record.
+ *
+ * `audio/mp4` is deliberately absent: an M4A is an MP4 container, and sniffing
+ * cannot tell a silent audio file from a video without reading the whole moov.
+ * Android's speech engine writes WAV and the browser's writes MP3, which is
+ * everything the client actually produces; a device that can only write `.caf`
+ * (iOS) keeps the script-only sound instead of uploading it.
+ */
+const MAX_AUDIO_SIZE_BYTES = 52_428_800; // 50 MB, public.sounds' cap
+const MAX_AUDIO_DURATION_MS = 3_600_000; // 1 hour, public.sounds' cap
+const AUDIO_TYPES: Record<string, string> = {
+  'audio/mpeg': 'mp3',
+  'audio/ogg': 'ogg',
+  'audio/wav': 'wav',
+};
+
+type Scope = 'chat' | 'short' | 'video' | 'sound';
 
 /** What the stored bytes actually are, once `confirm` has sniffed them. */
-type ObjectKind = 'video' | 'image';
+type ObjectKind = 'video' | 'image' | 'audio';
 
 type RequestBody = {
   action?: 'status' | 'put' | 'confirm' | 'get' | 'delete';
@@ -139,6 +157,7 @@ const ownPrefixes = (uid: string): string[] => [
   `shorts/${uid}/`,
   `video/${uid}/`,
   `thumb/${uid}/`,
+  `sounds/${uid}/`,
 ];
 
 const isOwnKey = (key: string, uid: string): boolean => ownPrefixes(uid).some((p) => key.startsWith(p));
@@ -161,13 +180,28 @@ const assertKeyScope = (
     }
     return;
   }
+  // Audio is a sound and nothing else: a reel that ends in `.mp3` is a mistake,
+  // and `public.create_sound` would refuse the key anyway.
+  if (kind === 'audio') {
+    if (!key.startsWith(`sounds/${uid}/`)) {
+      throw new HttpError('bad_request', 'an audio file belongs in the caller\'s sound space');
+    }
+    return;
+  }
+  if (kind === 'video' && scope === 'sound') {
+    throw new HttpError('bad_request', 'a sound ticket only accepts an audio file');
+  }
   if (scope === 'chat') {
     if (!key.startsWith(`chat/${chatId}/`)) {
       throw new HttpError('bad_request', 'key does not belong to this chat');
     }
     return;
   }
-  const expected = scope === 'video' ? `video/${uid}/` : `shorts/${uid}/`;
+  const expected = scope === 'video'
+    ? `video/${uid}/`
+    : scope === 'sound'
+    ? `sounds/${uid}/`
+    : `shorts/${uid}/`;
   if (!key.startsWith(expected)) {
     throw new HttpError('bad_request', 'key does not belong to this account');
   }
@@ -237,8 +271,8 @@ function handle(request: Request): Promise<Response> {
         status: 500,
       });
     }
-    if (body.scope !== 'chat' && body.scope !== 'short' && body.scope !== 'video') {
-      throw new HttpError('bad_request', "scope must be 'chat', 'short' or 'video'");
+    if (body.scope !== 'chat' && body.scope !== 'short' && body.scope !== 'video' && body.scope !== 'sound') {
+      throw new HttpError('bad_request', "scope must be 'chat', 'short', 'video' or 'sound'");
     }
     const scope: Scope = body.scope;
     const chatId = body.chatId == null ? null : String(body.chatId);
@@ -253,10 +287,18 @@ function handle(request: Request): Promise<Response> {
         await authorizeScope(userClient(env, token!), scope, caller.uid, chatId);
         const mime = expectString(body.mime, 'mime', { max: 100 })!;
         const imageExtension = IMAGE_TYPES[mime];
-        if (mime !== 'video/mp4' && imageExtension === undefined) {
+        const audioExtension = AUDIO_TYPES[mime];
+        if (mime !== 'video/mp4' && imageExtension === undefined && audioExtension === undefined) {
           throw new HttpError(
             'bad_request',
-            'only video/mp4, image/jpeg and image/png are accepted (there is no transcoding pipeline)',
+            'only video/mp4, image/jpeg, image/png, audio/mpeg, audio/ogg and audio/wav are accepted '
+              + '(there is no transcoding pipeline)',
+          );
+        }
+        if (audioExtension !== undefined && scope !== 'sound') {
+          throw new HttpError(
+            'bad_request',
+            "an audio file needs the 'sound' scope: it becomes a sound, not a reel",
           );
         }
         if (imageExtension !== undefined && scope === 'chat') {
@@ -266,11 +308,21 @@ function handle(request: Request): Promise<Response> {
           throw new HttpError('bad_request', 'image tickets are only minted for the personal key space');
         }
         const isLong = scope === 'video';
+        const isSound = audioExtension !== undefined;
         const sizeCap = imageExtension !== undefined
           ? MAX_IMAGE_BYTES
+          : isSound
+          ? MAX_AUDIO_SIZE_BYTES
           : (isLong ? MAX_LONG_SIZE_BYTES : MAX_SIZE_BYTES);
         if (imageExtension === undefined) {
-          expectInt(body.durationMs, 'durationMs', 1, isLong ? MAX_LONG_DURATION_MS : MAX_DURATION_MS);
+          expectInt(
+            body.durationMs,
+            'durationMs',
+            1,
+            isSound
+              ? MAX_AUDIO_DURATION_MS
+              : (isLong ? MAX_LONG_DURATION_MS : MAX_DURATION_MS),
+          );
         }
         expectInt(body.sizeBytes, 'sizeBytes', 1, sizeCap);
 
@@ -278,8 +330,10 @@ function handle(request: Request): Promise<Response> {
           ? `chat/${chatId}/app`
           : imageExtension !== undefined
           ? `thumb/${caller.uid}/app`
+          : isSound
+          ? `sounds/${caller.uid}/app`
           : (isLong ? `video/${caller.uid}/app` : `shorts/${caller.uid}/app`);
-        const extension = imageExtension ?? 'mp4';
+        const extension = imageExtension ?? audioExtension ?? 'mp4';
         const key = `${prefix}/${Date.now()}_${randomHex(4)}.${extension}`;
         const url = await presignS3(s3, {
           method: 'PUT',
@@ -316,7 +370,7 @@ function handle(request: Request): Promise<Response> {
         const kind = await sniffKind(s3, key);
         if (kind === null) {
           await deleteObject(s3, key);
-          throw new HttpError('bad_request', 'that file is not an MP4 video, a JPEG or a PNG');
+          throw new HttpError('bad_request', 'that file is not an MP4 video, a JPEG, a PNG or audio');
         }
         // The bytes decide the space they are allowed to have come from.
         assertKeyScope(scope, key, chatId, caller.uid, kind);
@@ -332,6 +386,27 @@ function handle(request: Request): Promise<Response> {
           }
           log.info('image confirmed', { uid: caller.uid, scope, key, sizeBytes });
           return ok({ key, sizeBytes, durationMs: 0, kind, contentType: 'image' }, cors);
+        }
+
+        // Audio stops here: its size is checked, its bytes are sniffed, and its
+        // duration is *not* measured, because reading an MP3 frame count means
+        // reading the whole file. The client passes the duration it knows (the
+        // spoken length of the script) and `public.create_sound` bounds it; the
+        // row is a soundtrack hint, never a security boundary.
+        if (kind === 'audio') {
+          if (scope !== 'sound') {
+            await deleteObject(s3, key);
+            throw new HttpError('bad_request', 'an audio file needs the sound scope');
+          }
+          if (sizeBytes > MAX_AUDIO_SIZE_BYTES) {
+            await deleteObject(s3, key);
+            throw new HttpError(
+              'payload_too_large',
+              `sounds must stay under ${MAX_AUDIO_SIZE_BYTES} bytes`,
+            );
+          }
+          log.info('sound confirmed', { uid: caller.uid, scope, key, sizeBytes });
+          return ok({ key, sizeBytes, durationMs: 0, kind, contentType: 'audio' }, cors);
         }
 
         const sizeCap = scope === 'video' ? MAX_LONG_SIZE_BYTES : MAX_SIZE_BYTES;
@@ -444,6 +519,10 @@ async function findReference(
       .limit(1);
     return { data: rows.data ?? [], error: rows.error };
   }
+  if (key.startsWith('sounds/')) {
+    const rows = await client.from('sounds').select('id').eq('object_key', key).limit(1);
+    return { data: rows.data ?? [], error: rows.error };
+  }
   if (key.startsWith('thumb/')) {
     const [videos, shorts] = await Promise.all([
       client.from('videos').select('id').eq('thumbnail_key', key).limit(1),
@@ -494,6 +573,18 @@ async function sniffKind(s3: S3Config, key: string): Promise<ObjectKind | null> 
   if (head.length >= 8 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) {
     return 'image';
   }
+  // Audio, in the three containers the ticket accepts: an MPEG file (with or
+  // without an `ID3` tag), an Ogg stream, or a RIFF/WAVE payload. Checked after
+  // the video and image signatures so a JPEG's `ffd8` can never read as audio.
+  if (head.length >= 3 && head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) return 'audio';
+  if (head.length >= 12 && head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46 &&
+      head[8] === 0x57 && head[9] === 0x41 && head[10] === 0x56 && head[11] === 0x45) {
+    return 'audio';
+  }
+  if (head.length >= 4 && head[0] === 0x4f && head[1] === 0x67 && head[2] === 0x67 && head[3] === 0x53) {
+    return 'audio';
+  }
+  if (head.length >= 2 && head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0) return 'audio';
   return null;
 }
 

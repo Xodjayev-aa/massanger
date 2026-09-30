@@ -11,6 +11,7 @@ import '../../app/di.dart';
 import '../../app/router.dart';
 import '../../core/errors.dart';
 import '../../data/economy_repository.dart';
+import '../../data/social_models.dart';
 import '../chats/widgets.dart';
 
 /// The store: Stars top-ups, the custom-tag unlock and the cosmetics shelf.

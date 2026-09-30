@@ -255,7 +255,7 @@ class _BotsPageState extends State<BotsPage> {
                             title: Row(
                               children: <Widget>[
                                 Flexible(child: Text(bot.displayName, overflow: TextOverflow.ellipsis)),
-                                if (bot.verified) ...<Widget>[
+                                if (bot.isVerified) ...<Widget>[
                                   const SizedBox(width: 4),
                                   const VerifiedBadge(size: 13),
                                 ],

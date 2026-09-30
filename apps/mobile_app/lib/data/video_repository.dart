@@ -12,7 +12,10 @@ import '../core/errors.dart';
 enum VideoScope {
   chat('chat'),
   short('short'),
-  video('video');
+  video('video'),
+  /// A voice-over or a soundtrack file: `sounds/<uid>/…`, capped at the
+  /// `public.sounds` limits (50 MB, one hour) rather than the reel ones.
+  sound('sound');
 
   const VideoScope(this.wire);
 
@@ -23,6 +26,7 @@ enum VideoScope {
   /// row behind a `thumb/` key may be seen at all.
   static VideoScope fromKey(String key) {
     if (key.startsWith('shorts/')) return VideoScope.short;
+    if (key.startsWith('sounds/')) return VideoScope.sound;
     if (key.startsWith('video/') || key.startsWith('thumb/')) return VideoScope.video;
     return VideoScope.chat;
   }

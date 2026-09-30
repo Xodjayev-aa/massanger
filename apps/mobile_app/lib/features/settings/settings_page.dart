@@ -72,12 +72,11 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _loadTelegram() async {
     try {
-      final preferences = await sl<TelegramRepository>().pushPreferences();
+      final status = await sl<TelegramRepository>().status();
       if (!mounted) return;
-      final map = preferences is Map ? preferences : const <String, dynamic>{};
       setState(() {
-        _telegramLinked = map['linked'] == true;
-        _telegramUsername = map['username'] as String? ?? map['telegram_username'] as String?;
+        _telegramLinked = status.isLinked;
+        _telegramUsername = status.tgUsername;
       });
     } catch (_) {
       // Linking is optional; a failure here must not block the rest of the page.

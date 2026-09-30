@@ -74,7 +74,11 @@ jobs:
       - name: analyze
         id: analyze
         working-directory: apps/mobile_app
-        run: flutter analyze --no-fatal-infos 2>&1 | tee flutter-analyze.log
+        # pipefail matters here: without it the pipeline's status is tee's, so a
+        # failing analyzer looked green and only the web build ever complained.
+        run: |
+          set -o pipefail
+          flutter analyze --no-fatal-infos 2>&1 | tee flutter-analyze.log
       - name: publish analyzer diagnostics on failure
         if: ${{ failure() && steps.analyze.outcome == 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         env:
@@ -87,7 +91,9 @@ jobs:
       - name: unit + widget tests
         id: test
         working-directory: apps/mobile_app
-        run: flutter test --reporter expanded 2>&1 | tee flutter-test.log
+        run: |
+          set -o pipefail
+          flutter test --reporter expanded 2>&1 | tee flutter-test.log
       - name: publish test diagnostics on failure
         if: ${{ failure() && steps.test.outcome == 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         env:
@@ -121,11 +127,12 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         id: android
         working-directory: apps/mobile_app
-        run: >-
-          flutter build apk --debug
-          --dart-define=SUPABASE_URL=https://example.supabase.co
-          --dart-define=SUPABASE_ANON_KEY=ci-placeholder-not-a-live-project
-          2>&1 | tee flutter-android.log
+        run: |
+          set -o pipefail
+          flutter build apk --debug \
+            --dart-define=SUPABASE_URL=https://example.supabase.co \
+            --dart-define=SUPABASE_ANON_KEY=ci-placeholder-not-a-live-project \
+            2>&1 | tee flutter-android.log
       - name: publish Android build diagnostics on failure
         if: ${{ failure() && steps.android.outcome == 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         env:

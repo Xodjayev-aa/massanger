@@ -598,8 +598,6 @@ class SoundSummary {
   final String? voiceName;
   final String? voiceLocale;
 
-  bool get isVoiceOver => origin == 'tts';
-
   /// True when the audio was rendered by the platform's text-to-speech: the
   /// script is stored so the device can re-render it in another voice (00021).
   bool get isVoiceOver => origin == 'tts';
